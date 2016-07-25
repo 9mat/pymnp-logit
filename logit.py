@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import pprint
 from scipy.optimize import minimize
 from scipy.misc import logsumexp
@@ -144,15 +144,14 @@ def getparams(theta, n):
 def value(theta, data, n):
 	alpha, beta, sigma, mu = getparams(theta, n)
 	alphai = alpha.dot(data.pcovar)
-	print 'value shape', alphai.shape, data.price.shape
 	return (alphai*data.price + beta.dot(data.covar) + alphai*sigma[:,data.treat]*data.z)/mu
 
-def loglikelihood(V):
+def loglikelihood(V, data):
 	return np.log(choiceprob(V).flat[data.choice_flat_idx_3D].mean(axis=0))
 
 # @profile
 def nloglf(theta, data, n):
-	return -loglikelihood(value(theta, data, n)).sum()
+	return -loglikelihood(value(theta, data, n), data).sum()
 
 def nloglf_grad(theta, data, n):
 	v     = value(theta, data, n)
@@ -206,10 +205,12 @@ def findiff(f, x):
 	return np.squeeze(grad)
 
 
+
 def mlecov(thetahat, loglikelihood):
 	g = findiff(loglikelihood, thetahat)
-	return g.dot(g)
+	return g.transpose().dot(g)
 
+'''
 theta0 = np.array([
 	-10,
 	0, 0, 
@@ -237,6 +238,7 @@ n, data = makedata(df, covarlbls, pricelbls, pcovarlbls)
 # print findiff(lambda x: nloglf(x,data,n), theta0)
 # print nloglf_grad(theta0, data, n)
 print mlecov(theta0, lambda x: loglikelihood(value(x,data,n)))
+
 exit()
 
 alpha = np.linspace(-50,-10)
@@ -262,3 +264,5 @@ print alpha
 # end = time.clock()
 
 # print end - start
+
+'''
