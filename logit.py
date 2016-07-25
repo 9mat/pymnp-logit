@@ -123,7 +123,6 @@ def makedata(df, covarlbls, pricelbls, pcovarlbls):
 # @profile
 def choiceprob(V):
 	# value of the first choice is normalzied tp 0
-	print 'V shape', V.shape
 	V = np.pad(V, ((0,0), (1,0), (0,0)), 'constant') 
 
 	# normalize all values by subtracting logsumexp across choices
@@ -237,7 +236,7 @@ n, data = makedata(df, covarlbls, pricelbls, pcovarlbls)
 # print nloglf(theta0,data,n)
 # print findiff(lambda x: nloglf(x,data,n), theta0)
 # print nloglf_grad(theta0, data, n)
-print mlecov(theta0, loglikelihood)
+print mlecov(theta0, lambda x: loglikelihood(value(x,data,n)))
 exit()
 
 alpha = np.linspace(-50,-10)
