@@ -33,7 +33,7 @@ class DataStructure:
 class DataContent:
 	pass
 
-def makedata(df, covarlbls, pricelbls, pcovarlbls):
+def makedata(df, covarlbls, pricelbls, pcovarlbls, draw = 100, seed = 1234):
 	# extract variable using above labels
 	pcovar = df.loc[:, pcovarlbls]
 	covar = df.loc[:, covarlbls]
@@ -59,7 +59,7 @@ def makedata(df, covarlbls, pricelbls, pcovarlbls):
 
 	n.thetaidx = np.cumsum([n.alpha, n.beta, n.sigma])
 
-	n.draw   = 100
+	n.draw   = draw
 
 	# data hold the actual content of the data frame above in numpy format
 	# the data is transposed so that choice will be the first index 
