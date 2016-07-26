@@ -71,6 +71,7 @@ def makedata(df, covarlbls, pricelbls, pcovarlbls, draw = 100, seed = 1234):
 	data.choice = df['choice'].as_matrix() - 1
 
 	data.choice_dummies = pd.get_dummies(data.choice).as_matrix().transpose()
+	data.treat_dummies = pd.get_dummies(data.treat).as_matrix().transpose()
 	data.z = np.random.randn(n.draw, n.choice-1, n.obs)
 
 	# data.price[data.price > 1000] = 10000
