@@ -70,8 +70,8 @@ def makedata(df, covarlbls, pricelbls, pcovarlbls, draw = 100, seed = 1234):
 	data.treat  = df['treattype'].as_matrix()
 	data.choice = df['choice'].as_matrix() - 1
 
-	data.choice_dummies = pd.get_dummies(data.choice).as_matrix().transpose()
-	data.treat_dummies = pd.get_dummies(data.treat).as_matrix().transpose()
+	data.choicedummy = pd.get_dummies(data.choice).as_matrix().transpose()
+	data.treatdummy = pd.get_dummies(data.treat).as_matrix().transpose()
 	data.z = np.random.randn(n.draw, n.choice-1, n.obs)
 
 	# data.price[data.price > 1000] = 10000
@@ -164,8 +164,8 @@ def nloglf_grad(theta, data, n):
 
 	# intermediate calculation
 	p_ri_normalized = p_ri/(p_i*n.draw)
-	factor_rji = data.choice_dummies[1:,] - p_rji[:,1:,]
-	factor_ji  = data.choice_dummies[1:,] - np.sum(p_ri_normalized[:,newaxis,:]*p_rji[:,1:,:], axis=0)
+	factor_rji = data.choicedummy[1:,] - p_rji[:,1:,]
+	factor_ji  = data.choicedummy[1:,] - np.sum(p_ri_normalized[:,newaxis,:]*p_rji[:,1:,:], axis=0)
 
 	dL_alpha = data.pcovar[:,newaxis,newaxis,:]*(data.price + sigma[:,data.treat]*data.z)*factor_rji/mu
 	dL_alpha[:,:,data.missing[1:,:]] = 0.0
@@ -176,7 +176,7 @@ def nloglf_grad(theta, data, n):
 	dLi_sigma = (alpha.dot(data.pcovar)*data.z*factor_rji*p_ri_normalized[:,newaxis,:]/mu).sum(axis=0)
 	dL_sigma = np.array([dLi_sigma[:,data.treat==i].sum(axis=1) for i in range(1,n.treat)])
 
-	dL_mu = -(v[:,1:,:]*p_rji[:,2:,:]*((data.choice_dummies[2:,:]-p_ri[:,newaxis,:])/(n.draw*p_i*mu[1:,:]))).sum(axis=(0,2))
+	dL_mu = -(v[:,1:,:]*p_rji[:,2:,:]*((data.choicedummy[2:,:]-p_ri[:,newaxis,:])/(n.draw*p_i*mu[1:,:]))).sum(axis=(0,2))
 
 	return -np.concatenate((dL_alpha, dL_beta.transpose().flatten(), dL_sigma.transpose().flatten(), dL_mu))
 
