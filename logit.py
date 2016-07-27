@@ -4,7 +4,11 @@ import numpy as np
 import pprint
 from scipy.optimize import minimize
 from scipy.misc import logsumexp
+import scipy.stats
+
 from numpy import newaxis
+
+import ghalton
 
 inputfile =  '../data/data_new.csv'
 # inputfile = "D:\\Dropbox\PhD Study\\research\\mnp_demand_gas_ethanol_dhl\\noisy price signal real data\\data\\data_new.csv"
@@ -72,7 +76,13 @@ def makedata(df, covarlbls, pricelbls, pcovarlbls, draw = 100, seed = 1234):
 
 	data.choicedummy = pd.get_dummies(data.choice).as_matrix().transpose()
 	data.treatdummy = pd.get_dummies(data.treat).as_matrix().transpose()
-	data.z = np.random.randn(n.draw, n.choice-1, n.obs)
+
+	sequencer = ghalton.GeneralizedHalton(ghalton.EA_PERMS[:n.choice-1])
+	draws = scipy.stats.norm().ppf(sequencer.get(n.draw*n.obs)).reshape((n.draw, n.obs, n.choice-1))
+	draws -= draws.mean(axis=2, keepdims=True)
+	data.z = np.transpose(draws, (0,2,1))
+
+	# data.z = np.random.randn(n.draw, n.choice-1, n.obs)
 
 	# data.price[data.price > 1000] = 10000
 
