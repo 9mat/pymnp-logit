@@ -132,12 +132,10 @@ def choiceprob(V):
 	return np.exp(V)
 
 def getparams(theta, n):
-	alpha, beta, sigma, mu = np.split(theta, n.thetaidx)
-
-	beta  = beta.reshape(n.choice-1, n.covar)
-	sigma = sigma.reshape(n.choice-1, n.treat-1)
-	sigma = np.hstack((np.array([[0.4],[0.15]]), sigma))
-	mu    = np.hstack((1,mu)).reshape(n.mu+1,1)
+	alpha  = theta[                      :n.alpha               ]
+	beta   = theta[n.alpha               :n.alpha+n.beta        ]
+	sigma  = theta[n.alpha+n.beta        :n.alpha+n.beta+n.sigma]
+	mu     = theta[n.alpha+n.beta+n.sigma:                      ]
 
 	return alpha, beta, sigma, mu
 
