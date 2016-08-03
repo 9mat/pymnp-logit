@@ -183,9 +183,9 @@ def calse(cov):
     return np.diag(cov)**0.5
 
 def getthetarange(n):
-    thetalb = [-60] + [-10]*(n.alpha-1) + [-3]*n.beta + [-2]*n.sigma + [0.3]*n.mu
-    thetaub = [-10] + [5]*(n.alpha-1) + [3]*n.beta + [1]*n.sigma + [2]*n.mu
-    return thetalb, thetaub
+    thetalower = [-60] + [-10]*(n.alpha-1) + [-3]*n.beta + [-2]*n.sigma + [0.3]*n.mu
+    thetaupper = [-10] + [5]*(n.alpha-1) + [3]*n.beta + [1]*n.sigma + [2]*n.mu
+    return thetalower, thetaupper
 
 def __init__():
     pass
