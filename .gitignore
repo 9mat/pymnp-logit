@@ -4,3 +4,5 @@
 *.opt
 *.npy
 result/*
+*.json
+*.png

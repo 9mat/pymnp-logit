@@ -45,6 +45,43 @@ theta, nloglf = buildtheano(data, n)
 eval_f, eval_grad, eval_hess = buildeval(theta, nloglf)
 
 
+outdir  = './result/' + specname 
+
+if multistartidx < 0:
+    print '** combine data'
+
+    pricelbls, covarlbls, pcovarlbls, zcovarlbls = lbls
+    collbls = ['nlogl', '|gradient|']
+
+    for l in pcovarlbls: collbls.append('price*' + l)
+    for j in range(n.choice-1):
+        for x in covarlbls:
+            collbls.append('choice_' + str(j+1) +'*' + x)
+    for j in range(n.choice-1):
+        for x in zcovarlbls:
+            collbls.append('ln(sigma)/choice_' + str(j+1) + '*' + x)
+
+    for j in range(n.choice-2):
+        collbls.append('mu/choice_' + str(j+2))
+
+    print ','.join(collbls)
+
+    for fname in glob.glob(outdir + '/result*.npz'):
+        result = np.load(fname)
+
+
+        thetahat = result['theta']
+        nlogl = float(result['nlogl'])
+        sehat = result['se']
+        grad = np.absolute(eval_grad(thetahat)).max()
+
+        print str(nlogl) + ',' + str(grad) + ',' + ','.join(str(thetahat[i]) for i in xrange(thetahat.size))
+        print  ' , ,' + ','.join(str(sehat[i]) for i in xrange(sehat.size))
+
+        exit()
+
+
+
 print '** generate a random starting point'
 
 thetalower, thetaupper = getthetarange(n)
@@ -80,8 +117,6 @@ except Exception, e:
 
 print '-- Time =', time()-start, 's'
 
-
-outdir  = './result/' + specname 
 outname = 'result'+ '_' + specname +'_' "{:03d}".format(int(multistartidx))
 
 try: os.makedirs(outdir)
