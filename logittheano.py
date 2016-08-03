@@ -82,6 +82,8 @@ class DataStructure:
 # theano.optimizer='fast_compile'
 # theano.exception_verbosity='high'
 
+floatX = 'float64'
+
 def getparams(theta, n):
     alpha  = theta[                      :n.alpha               ]
     beta   = theta[n.alpha               :n.alpha+n.beta        ].reshape((n.choice-1, n.covar))
@@ -91,23 +93,23 @@ def getparams(theta, n):
     return alpha, beta, sigma, mu
  
 def buildtheano(data, n):
-    theta  = T.fvector('theta')
+    theta  = T.dvector('theta')
     alpha, beta, sigma, mu = getparams(theta, n)
     
-    mu     = T.concatenate([T.ones(1, dtype='float32'), mu])
+    mu     = T.concatenate([T.ones(1, dtype=floatX), mu])
     
-    price  = theano.shared(data.price.astype('float32'),  name='price')
-    covar  = theano.shared(data.covar.astype('float32'),  name='X1')
-    pcovar = theano.shared(data.pcovar.astype('float32'), name='X2')
-    draw   = theano.shared(data.z.astype('float32'),      name='z')
-    zcovar = theano.shared(data.zcovar.astype('float32'), name='X3')
+    price  = theano.shared(data.price.astype(floatX),  name='price')
+    covar  = theano.shared(data.covar.astype(floatX),  name='X1')
+    pcovar = theano.shared(data.pcovar.astype(floatX), name='X2')
+    draw   = theano.shared(data.z.astype(floatX),      name='z')
+    zcovar = theano.shared(data.zcovar.astype(floatX), name='X3')
 
     alphai     = T.dot(alpha,pcovar)
     valuefixed = alphai*price + T.dot(beta,covar)
     valuenoise = alphai*T.exp(T.dot(sigma, zcovar)).dimshuffle('x',0,1)*draw
     value      = (valuefixed.dimshuffle('x',0,1) + valuenoise)/mu.dimshuffle('x',0,'x')
 
-    value2     = T.concatenate([T.zeros((n.draw,1,n.obs), dtype='float32'), value], axis = 1)
+    value2     = T.concatenate([T.zeros((n.draw,1,n.obs), dtype=floatX), value], axis = 1)
     value3     = value2 - value2.max(axis=1, keepdims=True)
 
     expvalue   = T.exp(value3)
