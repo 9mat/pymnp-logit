@@ -94,7 +94,7 @@ def buildtheano(data, n):
     theta  = T.fvector('theta')
     alpha, beta, sigma, mu = getparams(theta, n)
     
-    mu     = T.concatenate([T.ones(1), mu])
+    mu     = T.concatenate([T.ones(1, dtype='float32'), mu])
     
     price  = theano.shared(data.price.astype('float32'),  name='price')
     covar  = theano.shared(data.covar.astype('float32'),  name='X1')
