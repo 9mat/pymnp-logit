@@ -91,7 +91,7 @@ def getparams(theta, n):
     return alpha, beta, sigma, mu
  
 def buildtheano(data, n):
-    theta  = T.dvector('theta')
+    theta  = T.fvector('theta')
     alpha, beta, sigma, mu = getparams(theta, n)
     
     mu     = T.concatenate([T.ones(1), mu])
@@ -107,7 +107,7 @@ def buildtheano(data, n):
     valuenoise = alphai*T.exp(T.dot(sigma, zcovar)).dimshuffle('x',0,1)*draw
     value      = (valuefixed.dimshuffle('x',0,1) + valuenoise)/mu.dimshuffle('x',0,'x')
 
-    value2     = T.concatenate([T.zeros((n.draw,1,n.obs)), value], axis = 1)
+    value2     = T.concatenate([T.zeros((n.draw,1,n.obs), dtype='float32'), value], axis = 1)
     value3     = value2 - value2.max(axis=1, keepdims=True)
 
     expvalue   = T.exp(value3)
