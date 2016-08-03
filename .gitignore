@@ -1,2 +1,6 @@
 *.ipyn*
 *.pyc
+*.txt
+*.opt
+*.npy
+result/*
