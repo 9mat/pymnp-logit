@@ -78,7 +78,7 @@ if multistartidx < 0:
         print str(nlogl) + ',' + str(grad) + ',' + ','.join(str(thetahat[i]) for i in xrange(thetahat.size))
         print  ' , ,' + ','.join(str(sehat[i]) for i in xrange(sehat.size))
 
-        exit()
+    exit()
 
 
 
