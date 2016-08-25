@@ -65,15 +65,14 @@ class DataStructure:
         self.alpha  = self.pcovar
         self.beta   = self.covar*(self.choice-1)
         self.sigma  = self.zcovar*(self.choice-1)
-        self.mu     = self.choice-2
         
         self.obs    = df.shape[0]
         self.draw   = draw
 
 # ## Model Specification
-# * Indirect utility $$u_{rji}=\alpha D_i \left(p_{ji} + \sigma_{ji} z_{rji}\right) + \beta_j X_i + \mu_j \epsilon_{rji}=\underbrace{\alpha D_i p_{ji} + \beta_j X_i}_{V_{ji}^{fixed}} + \underbrace{\alpha D_i \sigma_{ji} z_{rji}}_{V_{rji}^{noise}} + \mu_j \epsilon_{rji}$$
+# * Indirect utility $$u_{rji}=\alpha D_i \left(p_{ji} + \sigma_{ji} z_{rji}\right) + \beta_j X_i + \epsilon_{rji}=\underbrace{\alpha D_i p_{ji} + \beta_j X_i}_{V_{ji}^{fixed}} + \underbrace{\alpha D_i \sigma_{ji} z_{rji}}_{V_{rji}^{noise}} + \epsilon_{rji}$$
 # 
-# * Choice probability $$P_{rji} = \frac{\exp\left(\frac{V_{rji}}{\mu_j}\right)}{1+\sum_k \exp\left(\frac{V_{rki}}{\mu_k}\right)}$$
+# * Choice probability $$P_{rji} = \frac{\exp\left(V_{rji}\right)}{1+\sum_k \exp\left(V_{rki}\right)}$$
 # 
 # * Log likelihood ($j_i^*$ denotes the actual choice of $i$) $$L = \sum_i \ln\left(\frac{1}{R} \sum_r P_{rj_i^*i}\right)$$
 
@@ -85,19 +84,16 @@ class DataStructure:
 floatX = 'float64'
 
 def getparams(theta, n):
-    alpha  = theta[                      :n.alpha               ]
-    beta   = theta[n.alpha               :n.alpha+n.beta        ].reshape((n.choice-1, n.covar))
-    sigma  = theta[n.alpha+n.beta        :n.alpha+n.beta+n.sigma].reshape((n.choice-1, n.zcovar))
-    mu     = theta[n.alpha+n.beta+n.sigma:                      ]
+    alpha  = theta[                      :n.alpha       ]
+    beta   = theta[n.alpha               :n.alpha+n.beta].reshape((n.choice-1, n.covar))
+    sigma  = theta[n.alpha+n.beta        :              ].reshape((n.choice-1, n.zcovar))
     
-    return alpha, beta, sigma, mu
+    return alpha, beta, sigma
  
 def buildtheano(data, n):
     theta  = T.dvector('theta')
-    alpha, beta, sigma, mu = getparams(theta, n)
-    
-    mu     = T.concatenate([T.ones(1, dtype=floatX), mu])
-    
+    alpha, beta, sigma = getparams(theta, n)
+        
     price  = theano.shared(data.price.astype(floatX),  name='price')
     covar  = theano.shared(data.covar.astype(floatX),  name='X1')
     pcovar = theano.shared(data.pcovar.astype(floatX), name='X2')
@@ -107,7 +103,7 @@ def buildtheano(data, n):
     alphai     = T.dot(alpha,pcovar)
     valuefixed = alphai*price + T.dot(beta,covar)
     valuenoise = alphai*T.exp(T.dot(sigma, zcovar)).dimshuffle('x',0,1)*draw
-    value      = (valuefixed.dimshuffle('x',0,1) + valuenoise)/mu.dimshuffle('x',0,'x')
+    value      = valuefixed.dimshuffle('x',0,1) + valuenoise
 
     value2     = T.concatenate([T.zeros((n.draw,1,n.obs), dtype=floatX), value], axis = 1)
     value3     = value2 - value2.max(axis=1, keepdims=True)
@@ -183,8 +179,8 @@ def calse(cov):
     return np.diag(cov)**0.5
 
 def getthetarange(n):
-    thetalower = [-60] + [-10]*(n.alpha-1) + [-3]*n.beta + [-2]*n.sigma + [0.3]*n.mu
-    thetaupper = [-10] + [5]*(n.alpha-1) + [3]*n.beta + [1]*n.sigma + [2]*n.mu
+    thetalower = [-60] + [-10]*(n.alpha-1) + [-3]*n.beta + [-2]*n.sigma
+    thetaupper = [-10] + [5]*(n.alpha-1) + [3]*n.beta + [1]*n.sigma
     return thetalower, thetaupper
 
 def __init__():

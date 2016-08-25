@@ -61,9 +61,6 @@ if multistartidx < 0:
         for x in zcovarlbls:
             collbls.append('ln(sigma)/choice_' + str(j+1) + '*' + x)
 
-    for j in range(n.choice-2):
-        collbls.append('mu/choice_' + str(j+2))
-
     print ','.join(collbls)
 
     for fname in glob.glob(outdir + '/result*.npz'):
