@@ -6,7 +6,7 @@ import theano.gradient
 import theano.tensor.slinalg
 import pyipopt
 
-inputfile = '../data/data_new.csv'
+inputfile = '../data/data_new_lp.csv'
 df = pd.read_csv(inputfile)
 
 # generate const and treatment dummies
@@ -17,7 +17,7 @@ df = pd.concat([df, pd.get_dummies(df['treattype'], prefix='dv_treat')], axis=1)
 #df['choice'][df['choice']==3]=2
 #%%
 
-pricelbls = ["rel_p_km_adj2", "rel_p_km_adj3" ]
+pricelbls = ["rel_lp_km_adj2", "rel_lp_km_adj3" ]
 #pricelbls = ["rel_p_km_adj2" ]
 Xlbls =     [
       "dv_female", 
@@ -39,7 +39,7 @@ Xplbls = ['const']
 Xhetlbls = ['dv_treat_1', 'dv_treat_2']
 
 choice  = df['choice'].as_matrix()
-price   = df.loc[:, pricelbls].fillna(10000).as_matrix().transpose()
+price   = df.loc[:, pricelbls].as_matrix().transpose()
 X       = df.loc[:, Xlbls].as_matrix().transpose()
 Xp      = df.loc[:, Xplbls].as_matrix().transpose()
 Xhet    = df.loc[:, Xhetlbls].as_matrix().transpose()
@@ -116,7 +116,7 @@ def normcdf(x):
 def norminv(p):
     return np.sqrt(2)*T.erfinv(2*p-1)
     
-ndraws = 500
+ndraws = 50
 draws = np.random.random((ndraws,nobs))
 
 prob0 = normcdf(-Vnonchoice[0,:]/c00[choice-1])
@@ -141,7 +141,7 @@ eval_grad = lambda t: np.squeeze(grad(t))
 eval_hess = lambda t: np.squeeze(hess(t))
 
 
-alpha0 = [-13.63116686]
+alpha0 = [-5.63116686]
 beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995, -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
          -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098, -0.051455999185487045, -0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
 gamma0 = [-0.10, -0.05]
