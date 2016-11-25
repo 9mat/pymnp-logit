@@ -6,7 +6,7 @@ import theano.gradient
 import theano.tensor.slinalg
 import pyipopt
 
-inputfile = '../data/data_new.csv'
+inputfile = '../data/data_new_lp.csv'
 df = pd.read_csv(inputfile)
 
 # generate const and treatment dummies
@@ -17,7 +17,7 @@ df = pd.concat([df, pd.get_dummies(df['treattype'], prefix='dv_treat')], axis=1)
 #df['choice'][df['choice']==3]=2
 #%%
 
-pricelbls = ["rel_p_km_adj2", "rel_p_km_adj3" ]
+pricelbls = ["rel_lp_km_adj2", "rel_lp_km_adj3" ]
 #pricelbls = ["rel_p_km_adj2" ]
 Xlbls =     [
       "dv_female", 
@@ -36,79 +36,81 @@ Xlbls =     [
     ]
 
 Xplbls = ['const']
-Xhetlbls = ['dv_treat_1', 'dv_treat_2']
 
 choice  = df['choice'].as_matrix()
-price   = df.loc[:, pricelbls].fillna(10000).as_matrix().transpose()
+price   = df.loc[:, pricelbls].as_matrix().transpose()
 X       = df.loc[:, Xlbls].as_matrix().transpose()
 Xp      = df.loc[:, Xplbls].as_matrix().transpose()
-Xhet    = df.loc[:, Xhetlbls].as_matrix().transpose()
+groupid = df.loc[:, 'treattype'].as_matrix().transpose()
 
-nX, nXp, nXhet, nchoice  = len(Xlbls), len(Xplbls), len(Xhetlbls), len(pricelbls) + 1
+nX, nXp, nchoice  = len(Xlbls), len(Xplbls), len(pricelbls) + 1
 
 nalpha  = nXp
 nbeta   = nX*(nchoice-1)
-ngamma  = nXhet
 nsigma  = (nchoice-1)*nchoice/2 - 1
 
 nobs    = df.shape[0]
 ndraw   = 10
+ngroup  = np.unique(groupid).size
 
-triu_index_matrix = np.zeros([nchoice-1, nchoice-1], dtype=int) + nsigma + 1
-triu_index_matrix[np.triu_indices(nchoice-1)] = np.arange(nsigma+1)
+nallsigma = (nsigma+1)*ngroup - 1
+
+#%%
+tril_index_matrix = np.zeros((ngroup, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
+
+tril_index = np.vstack([np.repeat(np.arange(ngroup), nsigma+1), 
+                       np.tile(np.tril_indices(nchoice-1), ngroup)]).tolist()
+
+tril_index_matrix[tril_index] = np.arange(nallsigma+1)
 
 
 def getparams(theta):
     offset = 0
     alpha  = theta[offset: offset + nalpha]
-
+    
     offset += nalpha
     beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
-
-    offset += nbeta
-    gamma  = theta[offset: offset + ngamma]
-
-    offset += ngamma
-    s = T.concatenate([[1], theta[offset: offset + nsigma], [0]])
-    S = s[triu_index_matrix].transpose()
     
-    return alpha, beta, gamma, S
+    offset += nbeta
+    s = T.concatenate([[1], theta[offset: offset + nallsigma], [0]])
+    S = s[tril_index_matrix]
+    
+    return alpha, beta, S
 
 floatX = 'float64'
 
 theta  = T.dvector('theta')
-alpha, beta, gamma, S = getparams(theta)
+alpha, beta, S = getparams(theta)
     
 #Tprice  = theano.shared(price.astype(floatX),  name='price')
 #TX      = theano.shared(X.astype(floatX),  name='X')
 #TXp     = theano.shared(Xp.astype(floatX), name='Xp')
 #TXhet   = theano.shared(Xhet.astype(floatX), name='Xhet')
 
-scale = T.exp(T.dot(gamma, Xhet))
-
 V       = (T.dot(alpha,Xp)*price + T.dot(beta,X))
 Vfull   = T.concatenate([T.zeros((1, nobs)), V], axis = 0)
 Vchoice = Vfull[(choice-1,np.arange(nobs))]
-Vnorm   = (Vfull - Vchoice)/scale
+Vnorm   = (Vfull - Vchoice)
 
 nonchoicedummy = np.ones((nobs, nchoice), dtype = bool)
 nonchoicedummy[(range(nobs), choice-1)] = False
 iii = np.arange(nobs*nchoice).reshape(nonchoicedummy.shape)
 nonchoiceidx = iii[nonchoicedummy].reshape((nobs, nchoice-1))
- 
+
 Vnonchoice = Vnorm.transpose().flatten()[nonchoiceidx].transpose()               
 
-chol = T.slinalg.Cholesky()
-
+#%%
 M = np.stack([[[1,0],[0,1]], [[-1,0],[-1,1]], [[0,-1],[1,-1]]])
-
-MS = [T.dot(m,S) for m in M]
-Sigma = T.stack([T.dot(ms,ms.transpose()) for ms in MS])
+MS = T.dot(M, S).dimshuffle((0,2,1,3)).reshape((ngroup*nchoice, nchoice-1, nchoice-1))
+Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1))).reshape((nchoice, ngroup, nchoice-1, nchoice-1))
 
 #%%
-c00 = T.sqrt(Sigma[:,0,0])
-c10 = Sigma[:,1,0]/c00
-c11 = T.sqrt(Sigma[:,1,1] - c10**2)
+
+iii = (choice-1, groupid)
+
+c00 = T.sqrt(Sigma[:,:,0,0])
+c10 = Sigma[:,:,1,0]/c00
+c11 = T.sqrt(Sigma[:,:,1,1] - c10**2)
 
 def normcdf(x):
     return 0.5 + 0.5*T.erf(x/np.sqrt(2))
@@ -116,18 +118,18 @@ def normcdf(x):
 def norminv(p):
     return np.sqrt(2)*T.erfinv(2*p-1)
     
-ndraws = 500
+ndraws = 50
 draws = np.random.random((ndraws,nobs))
 
-prob0 = normcdf(-Vnonchoice[0,:]/c00[choice-1])
+prob0 = normcdf(-Vnonchoice[0,:]/c00[iii])
 draws1 = norminv(draws*prob0)
-prob1 = normcdf(-(Vnonchoice[1,:] + c10[choice-1]*draws1)/c11[choice-1])
+prob1 = normcdf(-(Vnonchoice[1,:] + c10[iii]*draws1)/c11[iii])
 
 nlogl = -T.log(prob0).sum() - T.log(prob1.sum(axis=0)/ndraws).sum()
 #nlogl = -T.log(prob0).sum()
     
-nlogllogit = T.log(T.sum(T.exp(Vfull/scale), axis=0)).sum() - (Vchoice/scale).sum()
-theta0 = np.zeros((nalpha+nbeta+ngamma+nsigma,))
+nlogllogit = T.log(T.sum(T.exp(Vfull), axis=0)).sum() - (Vchoice).sum()
+theta0 = np.zeros((nalpha+nbeta+nsigma,))
 theta0[0] = -20
 theta0[-1] = 0.1
 theta0[-2] = 0.2
@@ -141,14 +143,16 @@ eval_grad = lambda t: np.squeeze(grad(t))
 eval_hess = lambda t: np.squeeze(hess(t))
 
 
-alpha0 = [-13.63116686]
+#%%
+alpha0 = [-5.63116686]
 beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995, -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
          -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098, -0.051455999185487045, -0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
 gamma0 = [-0.10, -0.05]
-S0 = [0.4389639,1.07280456]
+S0 = [0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
 
-theta0 = np.concatenate([alpha0, beta0, gamma0, S0])
+theta0 = np.concatenate([alpha0, beta0, S0])
 
+#%%
 
 pyipopt.set_loglevel(1)
 thetahat , _, _, _, _, fval = pyipopt.fmin_unconstrained(
