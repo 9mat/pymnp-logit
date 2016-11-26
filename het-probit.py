@@ -66,7 +66,14 @@ for i in range(nstation):
 dv_choice = np.arange(nchoice).reshape((nchoice,1)) == (choice-1)
 nobsstation = np.array([(stationid==sid).sum() for sid in range(nstation)])
 
-nxi = nstation*(nchoice-1)
+
+#%% nuisance xi
+sumchoice_station = np.array([dv_choice[1:, stationid == i].sum(axis = 1) for i in range(nstation)]).transpose()
+nuisancexi = sumchoice_station == 0
+nxi = (1-nuisancexi).sum()
+
+xi_idx = np.zeros(nuisancexi.shape, dtype = int) + nxi
+xi_idx[~nuisancexi] = np.arange(nxi)
 
 #%%
 tril_index_matrix = np.zeros((ngroup, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
@@ -85,11 +92,12 @@ def getparams(theta, mm=T):
     beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
     
     offset += nbeta
-    s = mm.concatenate([[1], theta[offset: offset + nallsigma], [0]])
-    S = s[tril_index_matrix]
+    sraw = mm.concatenate([[1], theta[offset: offset + nallsigma], [0]])
+    S = sraw[tril_index_matrix]
     
     offset += nallsigma
-    xi = theta[offset:offset+nxi].reshape((nchoice-1, nstation))
+    xiraw = mm.concatenate([theta[offset:offset+nxi], [-10000.]])
+    xi = xiraw[xi_idx]
     
     return alpha, beta, S, xi
 
@@ -170,50 +178,39 @@ p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,g
 
 pallbase = p0allbase*p0allbase
 
-pstationlist = []
-pstationtruelist = []
+pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
+pstationtrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[~nuisancexi.flatten()]
                
-for sid in range(nstation):
-    mask = stationid == sid
-    pstationlist.append(pallbase[1:,mask.nonzero()[0]].mean(axis=1))
-    pstationtruelist.append(dv_choice[1:, mask].mean(axis=1))
-    
-pstation = T.stack(pstationlist).transpose()
-pstationtrue = np.stack(pstationtruelist).transpose()
-
-mask = pstationtrue.min(axis=0) < 1e-6
-pstationtrue[:,mask] = pstationtrue[:,mask] + 1e-6
-pstationtrue[:,mask] /= pstationtrue[:,mask].sum(axis=0)
-
 obj_multiplier = T.dscalar('obj_multiplier')
 lagrange_multiplier = T.dvector('lagrange_multiplier')
-lagrange = obj_multiplier*obj + (lagrange_multiplier*pstation.flatten()).sum()
+lagrange = obj_multiplier*obj + (lagrange_multiplier*pstation).sum()
 
-constr = theano.function([theta], pstation.flatten())
-jab = theano.function([theta], T.jacobian(pstation.flatten(), [theta]))
+constr = theano.function([theta], pstation)
+jab = theano.function([theta], T.jacobian(pstation, [theta]))
 hess_constr = theano.function([theta, lagrange_multiplier, obj_multiplier], 
                               outputs=theano.gradient.hessian(lagrange, [theta]))
 
 ntheta1 = nalpha + nbeta + nallsigma
+nxifull = (nchoice-1)*nstation
 mask00 = np.ones((ntheta1, ntheta1), dtype = bool)
 mask01 = np.ones((ntheta1, nxi), dtype = bool)
 mask10 = np.ones((nxi, ntheta1), dtype = bool)
-mask11 = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))
+mask11 = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))[~nuisancexi.flatten(),:][:,~nuisancexi.flatten()]
 
 maskj = np.hstack((mask10, mask11))
 maskh = np.hstack((np.vstack((mask00, mask10)), np.vstack((mask01, mask11))))
 
 def solve_constr(theta0):
     pyipopt.set_loglevel(1)    
-    n = theta0.size
+    n = theta0.size    
     x_L = np.array([pyipopt.NLP_LOWER_BOUND_INF]*n, dtype=float)
-    x_U = np.array([pyipopt.NLP_UPPER_BOUND_INF]*n, dtype=float)    
+    x_U = np.array([pyipopt.NLP_UPPER_BOUND_INF]*n, dtype=float)        
     ncon = pstationtrue.size
-    g_L = g_U = pstationtrue.flatten()    
+    g_L = g_U = pstationtrue    
     nnzj = maskj.sum()
     nnzh = maskh.sum()    
     idxrj, idxcj = np.mgrid[:ncon, :n]
-    idxrh, idxch = np.mgrid[:n, :n]    
+    idxrh, idxch = np.mgrid[:n, :n]
     rj, cj = idxrj[maskj], idxcj[maskj]
 #    rh, ch = idxrh[maskh], idxch[maskh]    
     eval_c = lambda t: constr(t)
@@ -253,10 +250,9 @@ def solve_unconstr(theta0):
 
 #%%
 
-pstationtrue[pstationtrue == 0.0] = 1e-40
-
-def contraction(thetahat):
-    xihat = np.array(thetahat[-nxi:])
+def contraction(theta):
+    x = np.array(theta)
+    xihat = np.array(x[-nxi:])
     
     toler = 1e-6
     convergent = False
@@ -268,11 +264,11 @@ def contraction(thetahat):
         
     while not convergent:
         xihatold = np.array(xihat)
-        thetahat[-nxi:] = xihat
+        x[-nxi:] = xihat
         
         ss = share(thetahat)
         ss[ss<1e-40]=1e-40
-        xihat -= 0.5*(np.log(ss) - np.log(pstationtrue.flatten()))
+        xihat -= 0.01*(np.log(ss) - np.log(pstationtrue.flatten()))
         error = np.abs(xihat-xihatold).max()
         print xihat-xihatold
         print "iter", i, "error =", error
@@ -282,7 +278,7 @@ def contraction(thetahat):
         if i > 5000:
             break
         
-    return thetahat
+    return x
 
 #%%
 alpha0 = [-5.63116686]
