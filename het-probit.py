@@ -6,6 +6,8 @@ import theano.gradient
 import theano.tensor.slinalg
 import pyipopt
 
+from scipy.stats import norm
+
 inputfile = '../data/data_new_lp.csv'
 df = pd.read_csv(inputfile)
 
@@ -169,6 +171,15 @@ eval_hess = lambda t: np.squeeze(hess(t))
 
 
 #%%
+alpha0 = [-5.63116686]
+beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995, -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
+         -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098, -0.051455999185487045, -0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
+gamma0 = [-0.10, -0.05]
+S0 = [0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
+xi0 = np.zeros((nxi,))
+theta0 = np.concatenate([alpha0, beta0, S0, xi0])
+
+#%%
 
 Vallbase        = T.dot(M, V)
 p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
@@ -200,7 +211,7 @@ mask11 = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))[~nuisan
 maskj = np.hstack((mask10, mask11))
 maskh = np.hstack((np.vstack((mask00, mask10)), np.vstack((mask01, mask11))))
 
-def solve_constr(theta0):
+def solve_constr(theta0, use_hess = False):
     pyipopt.set_loglevel(1)    
     n = theta0.size    
     x_L = np.array([pyipopt.NLP_LOWER_BOUND_INF]*n, dtype=float)
@@ -210,17 +221,21 @@ def solve_constr(theta0):
     nnzj = maskj.sum()
     nnzh = maskh.sum()    
     idxrj, idxcj = np.mgrid[:ncon, :n]
-    idxrh, idxch = np.mgrid[:n, :n]
-    rj, cj = idxrj[maskj], idxcj[maskj]
-#    rh, ch = idxrh[maskh], idxch[maskh]    
+    idxrh, idxch = np.mgrid[:n, :n]    
     eval_c = lambda t: constr(t)
-    eval_j = lambda t, flag: (rj, cj) if flag else np.squeeze(jab(t))[maskj]
-#    eval_h = lambda t, l, o, flag: (rh, ch) if flag else np.squeeze(hess_constr(t,l,o))[maskh]
-    nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j)
+    eval_j = lambda t, f: (idxrj[maskj], idxcj[maskj]) if f else np.squeeze(jab(t))[maskj]
+    if use_hess:
+        eval_h = lambda t, l, o, f: (idxrh[maskh], idxch[maskh]) if f else np.squeeze(hess_constr(t,l,o))[maskh]
+        nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j, eval_h)
+    else:
+        nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j)
     results = nlp.solve(theta0)
     nlp.close()
     return results
     
+#%%
+rrr = solve_constr(theta0)
+#%%
 def findiff(f, x):
     dx = 1e-5*abs(x)
     dx[dx <1e-7] = 1e-7
@@ -254,7 +269,7 @@ def contraction(theta):
     x = np.array(theta)
     xihat = np.array(x[-nxi:])
     
-    toler = 1e-12
+    toler = 1e-13
     convergent = False
     share = lambda t: np.squeeze(constr(t))
     
@@ -268,7 +283,8 @@ def contraction(theta):
         
         ss = share(x)
         ss[ss<1e-40]=1e-40
-        xihat -= 0.2*(np.log(ss) - np.log(pstationtrue.flatten()))
+#        xihat -= 0.2*(np.log(ss) - np.log(pstationtrue.flatten()))
+        xihat -= 0.9*(norm.ppf(ss/(1+ss)) - norm.ppf(pstationtrue/(1+pstationtrue)))
         error = np.abs(xihat-xihatold).max()
         print xihat-xihatold
         print "iter", i, "error =", error
@@ -280,14 +296,6 @@ def contraction(theta):
         
     return x
 
-#%%
-alpha0 = [-5.63116686]
-beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995, -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
-         -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098, -0.051455999185487045, -0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
-gamma0 = [-0.10, -0.05]
-S0 = [0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
-xi0 = np.zeros((nxi,))
-theta0 = np.concatenate([alpha0, beta0, S0, xi0])
 
 #%%
 
