@@ -254,7 +254,7 @@ def contraction(theta):
     x = np.array(theta)
     xihat = np.array(x[-nxi:])
     
-    toler = 1e-6
+    toler = 1e-12
     convergent = False
     share = lambda t: np.squeeze(constr(t))
     
@@ -266,9 +266,9 @@ def contraction(theta):
         xihatold = np.array(xihat)
         x[-nxi:] = xihat
         
-        ss = share(thetahat)
+        ss = share(x)
         ss[ss<1e-40]=1e-40
-        xihat -= 0.01*(np.log(ss) - np.log(pstationtrue.flatten()))
+        xihat -= 0.2*(np.log(ss) - np.log(pstationtrue.flatten()))
         error = np.abs(xihat-xihatold).max()
         print xihat-xihatold
         print "iter", i, "error =", error
