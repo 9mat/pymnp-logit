@@ -251,6 +251,38 @@ def solve_unconstr(theta0):
     
     return thetahat
 
+#%%
+
+pstationtrue[pstationtrue == 0.0] = 1e-40
+
+def contraction(thetahat):
+    xihat = np.array(thetahat[-nxi:])
+    
+    toler = 1e-6
+    convergent = False
+    share = lambda t: np.squeeze(constr(t))
+    
+    i = 1
+    
+    error = 1
+        
+    while not convergent:
+        xihatold = np.array(xihat)
+        thetahat[-nxi:] = xihat
+        
+        ss = share(thetahat)
+        ss[ss<1e-40]=1e-40
+        xihat -= 0.5*(np.log(ss) - np.log(pstationtrue.flatten()))
+        error = np.abs(xihat-xihatold).max()
+        print xihat-xihatold
+        print "iter", i, "error =", error
+        convergent = error < toler
+                
+        i += 1
+        if i > 5000:
+            break
+        
+    return thetahat
 
 #%%
 alpha0 = [-5.63116686]
@@ -265,7 +297,7 @@ theta0 = np.concatenate([alpha0, beta0, S0, xi0])
 
 thetahat = solve_unconstr(theta0)
 
-thetahat2 = solve_constr(thetahat)
+#thetahat2 = solve_constr(thetahat)
 #pyipopt.set_loglevel(1)
 #thetahat , _, _, _, _, fval = pyipopt.fmin_unconstrained(
 #    eval_f,
