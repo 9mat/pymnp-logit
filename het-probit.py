@@ -161,16 +161,16 @@ theta0 = np.concatenate([alpha0, beta0, S0, xi0])
 
 #%%
 
-Vallbase        = T.dot(M, V)
-p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
+Vallbase        = T.dot(M[1:,:,:], V)
+p0allbase       = normcdf(-Vallbase[:,0,:]/c00[1:,groupid])
 #drawsallbase    = np.random.random((ndraws,nchoice,nobs))
-drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws
+drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice-1,1)).transpose() + 0.5)/ndraws
 draws1allbase   = norminv(drawsallbase*prob0)
-p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
+p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[1:,groupid]*draws1allbase)/c11[1:,groupid]).mean(axis=0)
 
 pallbase = p0allbase*p0allbase
 
-pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
+pstation = T.stack([pallbase[:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
 pstationtrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[~nuisancexi.flatten()]
                
 obj_multiplier = T.dscalar('obj_multiplier')
@@ -275,6 +275,17 @@ def contraction(theta):
         
     return x
 
+#%%
+covhess = lambda x: np.linalg.inv(hess(x))
+
+dnlogf = T.grad(nlogl, [theta])[0]
+jac = T.jacobian(pstation, [theta])[0].transpose()
+dnlogfstar = dnlogf[:ntheta1] - T.dot(T.dot(jac[:ntheta1,:],T.nlinalg.matrix_inverse(jac[ntheta1:,:])), dnlogf[ntheta1:])
+d2nlogfstar = T.jacobian(dnlogfstar, [theta])[0]
+
+d2nlogfstarf = theano.function([theta], d2nlogfstar)
+
+ddd = d2nlogfstarf(theta0)
 
 #%%
 #rrr = solve_constr(theta0)
