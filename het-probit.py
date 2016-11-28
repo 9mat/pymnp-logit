@@ -11,6 +11,7 @@ from scipy.stats import norm
 inputfile = '../data/data_new_lp.csv'
 df = pd.read_csv(inputfile)
 
+#df = df[df['stationid'] < 200]
 # generate const and treatment dummies
 df['const'] = 1
 df = pd.concat([df, pd.get_dummies(df['treattype'], prefix='dv_treat')], axis=1)
@@ -97,23 +98,22 @@ def getparams(theta, mm=T):
     sraw = mm.concatenate([[1], theta[offset: offset + nallsigma], [0]])
     S = sraw[tril_index_matrix]
     
-    offset += nallsigma
-    xiraw = mm.concatenate([theta[offset:offset+nxi], [-10000.]])
-    xi = xiraw[xi_idx]
-    
-    return alpha, beta, S, xi
+    return alpha, beta, S
 
 floatX = 'float64'
 
 theta  = T.dvector('theta')
-alpha, beta, S, xi = getparams(theta)
+alpha, beta, S = getparams(theta)
+
+xi = T.dvector('xi')
+xifull = T.concatenate([xi, [-10000.]])[xi_idx]
     
 #Tprice  = theano.shared(price.astype(floatX),  name='price')
 #TX      = theano.shared(X.astype(floatX),  name='X')
 #TXp     = theano.shared(Xp.astype(floatX), name='Xp')
 #TXhet   = theano.shared(Xhet.astype(floatX), name='Xhet')
 
-V       = T.dot(alpha,Xp)*price + T.dot(beta,X) + xi[:,stationid]
+V       = T.dot(alpha,Xp)*price + T.dot(beta,X) + xifull[:,stationid]
 Vfull   = T.concatenate([T.zeros((1, nobs)), V], axis = 0)
 Vchoice = Vfull[(choice-1,np.arange(nobs))]
 Vnorm   = (Vfull - Vchoice)
@@ -156,18 +156,8 @@ nlogl = -T.log(prob0).sum() - T.log(prob1.sum(axis=0)/ndraws).sum()
 #nlogl = -T.log(prob0).sum()
     
 nlogllogit = T.log(T.sum(T.exp(Vfull), axis=0)).sum() - (Vchoice).sum()
-theta0 = np.zeros((nalpha+nbeta+nsigma,))
-theta0[0] = -20
-theta0[-1] = 0.1
-theta0[-2] = 0.2
 
 obj = nlogl
-eval_f = theano.function([theta], outputs = obj)
-grad = theano.function([theta], outputs = T.grad(obj, [theta]))
-hess = theano.function([theta], outputs = theano.gradient.hessian(obj, [theta]))
-
-eval_grad = lambda t: np.squeeze(grad(t))
-eval_hess = lambda t: np.squeeze(hess(t))
 
 
 #%%
@@ -177,7 +167,7 @@ beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.03111
 gamma0 = [-0.10, -0.05]
 S0 = [0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
 xi0 = np.zeros((nxi,))
-theta0 = np.concatenate([alpha0, beta0, S0, xi0])
+theta0 = np.concatenate([alpha0, beta0, S0])
 
 #%%
 
@@ -189,117 +179,121 @@ p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,g
 
 pallbase = p0allbase*p0allbase
 
-pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
-pstationtrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[~nuisancexi.flatten()]
-               
-obj_multiplier = T.dscalar('obj_multiplier')
-lagrange_multiplier = T.dvector('lagrange_multiplier')
-lagrange = obj_multiplier*obj + (lagrange_multiplier*pstation).sum()
+share = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
+sharetrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[~nuisancexi.flatten()]
 
-constr = theano.function([theta], pstation)
-jab = theano.function([theta], T.jacobian(pstation, [theta]))
-hess_constr = theano.function([theta, lagrange_multiplier, obj_multiplier], 
-                              outputs=theano.gradient.hessian(lagrange, [theta]))
+dnll = T.grad(nlogl, [theta, xi])
+dshare = T.jacobian(share, [theta,xi])
+dnllopt = dnll[0] - T.dot(T.dot(dshare[0].transpose(), T.nlinalg.matrix_inverse(dshare[1])), dnll[1])
 
-ntheta1 = nalpha + nbeta + nallsigma
-nxifull = (nchoice-1)*nstation
-mask00 = np.ones((ntheta1, ntheta1), dtype = bool)
-mask01 = np.ones((ntheta1, nxi), dtype = bool)
-mask10 = np.ones((nxi, ntheta1), dtype = bool)
-mask11 = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))[~nuisancexi.flatten(),:][:,~nuisancexi.flatten()]
-
-maskj = np.hstack((mask10, mask11))
-maskh = np.hstack((np.vstack((mask00, mask10)), np.vstack((mask01, mask11))))
-
-def solve_constr(theta0, use_hess = False):
-    pyipopt.set_loglevel(1)    
-    n = theta0.size    
-    x_L = np.array([pyipopt.NLP_LOWER_BOUND_INF]*n, dtype=float)
-    x_U = np.array([pyipopt.NLP_UPPER_BOUND_INF]*n, dtype=float)        
-    ncon = pstationtrue.size
-    g_L = g_U = pstationtrue    
-    nnzj = maskj.sum()
-    nnzh = maskh.sum()    
-    idxrj, idxcj = np.mgrid[:ncon, :n]
-    idxrh, idxch = np.mgrid[:n, :n]    
-    eval_c = lambda t: constr(t)
-    eval_j = lambda t, f: (idxrj[maskj], idxcj[maskj]) if f else np.squeeze(jab(t))[maskj]
-    if use_hess:
-        eval_h = lambda t, l, o, f: (idxrh[maskh], idxch[maskh]) if f else np.squeeze(hess_constr(t,l,o))[maskh]
-        nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j, eval_h)
-    else:
-        nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j)
-    results = nlp.solve(theta0)
-    nlp.close()
-    return results
-    
-#%%
-rrr = solve_constr(theta0)
-#%%
-def findiff(f, x):
-    dx = 1e-5*abs(x)
-    dx[dx <1e-7] = 1e-7
-    
-    df = []
-    for i in range(x.size):
-        x1 = np.array(x)
-        x2 = np.array(x)
-        
-        x1[i] -= dx[i]
-        x2[i] += dx[i]
-        
-        df.append((f(x2)-f(x1)).flatten()/(2*dx[i]))
-        
-    return np.stack(df)
-    
-def solve_unconstr(theta0):
-    pyipopt.set_loglevel(1)
-    thetahat , _, _, _, _, fval = pyipopt.fmin_unconstrained(
-        eval_f,
-        theta0,
-        fprime=eval_grad,
-        fhess=eval_hess,
-    )
-    
-    return thetahat
 
 #%%
 
-def contraction(theta):
-    x = np.array(theta)
-    xihat = np.array(x[-nxi:])
+eval_share = theano.function([theta, xi], share)
+
+def contraction(theta, xi0):
+    xi1 = np.array(xi0)
     
     toler = 1e-13
-    convergent = False
-    share = lambda t: np.squeeze(constr(t))
-    
+    convergent = False    
     i = 1
-    
-    error = 1
-        
+            
     while not convergent:
-        xihatold = np.array(xihat)
-        x[-nxi:] = xihat
-        
-        ss = share(x)
-        ss[ss<1e-40]=1e-40
+        sharesim = eval_share(theta, xi1)
+        sharesim[sharesim<1e-40]=1e-40
 #        xihat -= 0.2*(np.log(ss) - np.log(pstationtrue.flatten()))
-        xihat -= 0.9*(norm.ppf(ss/(1+ss)) - norm.ppf(pstationtrue/(1+pstationtrue)))
-        error = np.abs(xihat-xihatold).max()
-        print xihat-xihatold
-        print "iter", i, "error =", error
+        decr = (norm.ppf(sharesim/(1+sharesim)) - norm.ppf(sharetrue/(1+sharetrue)))
+        error = np.abs(decr).max()
+#        print xihat-xihatold
+#        print "iter", i, "error =", error
         convergent = error < toler
+        
+        xi1 -= decr
                 
         i += 1
         if i > 5000:
             break
         
-    return x
+    print 'iter =', i, 'error =', error
+        
+    return xi1
+    
+#%%
+
+station_xi = np.repeat(np.arange(nstation), nchoice-1)[~nuisancexi.flatten()]
+samestationmask = station_xi == station_xi.reshape((nxi, 1))
+samestationidx = np.zeros(samestationmask.shape, dtype = int) + samestationmask.sum()
+samestationidx[samestationmask] = np.arange(samestationmask.sum())
+
+sscontr = T.sum((T.log(share) - np.log(sharetrue))**2)
+dsscontr = T.grad(sscontr, [xi])[0]
+hsscontr = theano.gradient.hessian(sscontr, [xi])[0]
+
+sscontrf = theano.function([theta, xi], sscontr)
+dsscontrf = theano.function([theta, xi], dsscontr)
+hsscontrf = theano.function([theta, xi], hsscontr)
+
+def solve_xi(theta0, xi0):
+    pyipopt.set_loglevel(0)
+    return pyipopt.fmin_unconstrained(lambda x: sscontrf(theta0, x), 
+                                      xi0, 
+                                      fprime=lambda x: dsscontrf(theta0, x), 
+                                      fhess=lambda x: hsscontrf(theta0, x))[0]
+ 
+     
+#%%
+
+constr = T.log(share)
+jac = T.jacobian(constr, [xi])[0]
+
+maskj = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))[~nuisancexi.flatten(),:][:,~nuisancexi.flatten()]
+
+nnzj = nnzh = maskj.sum()
+idxrj, idxcj = np.mgrid[:nxi, :nxi]
+rj, cj = idxrj[maskj], idxcj[maskj]
+
+constrf = theano.function([theta, xi], constr)
+jacf = theano.function([theta, xi], jac)
+
+def solve_xi_constr(theta0, xi0):
+    pyipopt.set_loglevel(0)
+    eval_c = lambda x: constrf(theta0, x)
+    eval_j = lambda x, f: (rj, cj) if f else jacf(theta0, x)[maskj]
+    x_L = np.array([pyipopt.NLP_LOWER_BOUND_INF]*nxi, dtype=float)        
+    x_U = np.array([pyipopt.NLP_UPPER_BOUND_INF]*nxi, dtype=float)        
+    g_L = g_U = np.log(sharetrue)
+    nlp = pyipopt.create(nxi, x_L, x_U, nxi, g_L, g_U, nnzj, nnzh, lambda x: 0, lambda x: np.zeros((nxi,)), eval_c, eval_j)
+    results = nlp.solve(xi0)
+    nlp.close()
+    return results
+    
 
 
 #%%
 
-thetahat = solve_unconstr(theta0)
+eval_nlogl = theano.function([theta, xi], nlogl)
+eval_dnllopt = theano.function([theta, xi], dnllopt)
+
+eval_f = lambda t: eval_nlogl(t, solve_xi(t, xi0))
+eval_g = lambda t: eval_dnllopt(t, solve_xi(t, xi0))
+
+def solve_unconstr(theta0):
+    pyipopt.set_loglevel(1)
+    thetahat , _, _, _, _, fval = pyipopt.fmin_unconstrained(
+        eval_f,
+        theta0,
+        fprime=eval_g,
+        fhess=None,
+    )
+    return thetahat
+
+#%%
+solve_unconstr(theta0)
+
+
+#%%
+
+#thetahat = solve_unconstr(theta0)
 
 #thetahat2 = solve_constr(thetahat)
 #pyipopt.set_loglevel(1)
