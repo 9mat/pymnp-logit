@@ -5,45 +5,35 @@ import theano.tensor as T
 import theano.gradient
 import theano.tensor.slinalg
 import pyipopt
+import sys
+import json
 
 from scipy.stats import norm
 
-inputfile = '../data/data_new_lp.csv'
+#specname = sys.argv[1]
+specname = 'spec1het'
+
+with open(specname + '.json', 'r') as f:
+    spec = json.load(f)
+    inputfile = spec['inputfile']
+    lbls = spec['label']
+    Xlbls = lbls['X']
+    Xplbls = lbls['Xp']
+    pricelbls = lbls['price']
+    grouplbls = lbls['group']
+
 df = pd.read_csv(inputfile)
 
-# generate const and treatment dummies
+# make sure there is const in the data
 df['const'] = 1
-df = pd.concat([df, pd.get_dummies(df['treattype'], prefix='dv_treat')], axis=1)
 
-#df = df[(df['choice'] == 1) | (df['choice']==2)] 
-#df['choice'][df['choice']==3]=2
 #%%
-
-pricelbls = ["rel_lp_km_adj2", "rel_lp_km_adj3" ]
-#pricelbls = ["rel_p_km_adj2" ]
-Xlbls =     [
-      "dv_female", 
-      "dv_age_25to40y", 
-      "dv_age_40to65y", 
-      "dv_age_morethan65y", 
-      "dv_somesecondary", 
-      "dv_somecollege", 
-      "dv_carpriceadj_p75p100", 
-      "dv_usageveh_p75p100", 
-      "stationvisit_avgcarprice_adj",
-      "dv_ctb", 
-      "dv_bh", 
-      "dv_rec", 
-      "const"
-    ]
-
-Xplbls = ['const']
 
 choice  = df['choice'].as_matrix()
 price   = df.loc[:, pricelbls].as_matrix().transpose()
 X       = df.loc[:, Xlbls].as_matrix().transpose()
 Xp      = df.loc[:, Xplbls].as_matrix().transpose()
-groupid = df.loc[:, 'treattype'].as_matrix().transpose()
+groupid = df.loc[:, grouplbls].as_matrix().transpose()
 
 nX, nXp, nchoice  = len(Xlbls), len(Xplbls), len(pricelbls) + 1
 
