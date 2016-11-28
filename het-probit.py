@@ -67,8 +67,6 @@ nxi = (1-nuisancexi).sum()
 xi_idx = np.zeros(nuisancexi.shape, dtype = int) + nxi
 xi_idx[~nuisancexi] = np.arange(nxi)
 
-xi_idx_flat = np.where(~nuisancexi.flatten())[0]
-
 #%%
 tril_index_matrix = np.zeros((ngroup, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
 
@@ -132,6 +130,7 @@ norminv = lambda p: np.sqrt(2)*T.erfinv(2*p-1)
     
 ndraws = 10
 #draws = np.random.random((ndraws,nobs))
+
 draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
 
 prob0 = normcdf(-Vnonchoice[0,:]/c00[iii])
@@ -144,8 +143,12 @@ nlogl = -T.log(prob0).sum() - T.log(prob1.sum(axis=0)/ndraws).sum()
 nlogllogit = T.log(T.sum(T.exp(Vfull), axis=0)).sum() - (Vchoice).sum()
 obj = nlogl
 eval_f = theano.function([theta], outputs = obj)
-grad = theano.function([theta], outputs = T.grad(obj, [theta])[0])
-hess = theano.function([theta], outputs = theano.gradient.hessian(obj, [theta])[0])
+grad = theano.function([theta], outputs = T.grad(obj, [theta]))
+hess = theano.function([theta], outputs = theano.gradient.hessian(obj, [theta]))
+
+eval_grad = lambda t: np.squeeze(grad(t))
+eval_hess = lambda t: np.squeeze(hess(t))
+
 
 #%%
 alpha0 = [-5.63116686]
@@ -158,56 +161,55 @@ theta0 = np.concatenate([alpha0, beta0, S0, xi0])
 
 #%%
 
-Vallbase        = T.dot(M[1:,:,:], V)
-p0allbase       = normcdf(-Vallbase[:,0,:]/c00[1:,groupid])
+Vallbase        = T.dot(M, V)
+p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
 #drawsallbase    = np.random.random((ndraws,nchoice,nobs))
-drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice-1,1)).transpose() + 0.5)/ndraws
+drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws
 draws1allbase   = norminv(drawsallbase*prob0)
-p1allbase       = normcdf(-(Vallbase[:,1,:] + c10[1:,groupid]*draws1allbase)/c11[1:,groupid]).mean(axis=0)
+p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
 
 pallbase = p0allbase*p0allbase
 
-pstation = T.stack([pallbase[:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[xi_idx_flat]
-pstationtrue = np.stack([dv_choice[:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[xi_idx_flat]
+pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
+pstationtrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[~nuisancexi.flatten()]
                
 obj_multiplier = T.dscalar('obj_multiplier')
 lagrange_multiplier = T.dvector('lagrange_multiplier')
-lagrange = obj_multiplier*obj + T.dot(lagrange_multiplier,pstation)
+lagrange = obj_multiplier*obj + (lagrange_multiplier*pstation).sum()
 
 constr = theano.function([theta], pstation)
-jac = theano.function([theta], T.jacobian(pstation, [theta])[0])
+jab = theano.function([theta], T.jacobian(pstation, [theta]))
 hess_constr = theano.function([theta, lagrange_multiplier, obj_multiplier], 
-                              theano.gradient.hessian(lagrange, [theta])[0])
+                              outputs=theano.gradient.hessian(lagrange, [theta]))
 
 ntheta1 = nalpha + nbeta + nallsigma
 nxifull = (nchoice-1)*nstation
-mask00 = np.ones((ntheta1, ntheta1+nxi), dtype = bool)
+mask00 = np.ones((ntheta1, ntheta1), dtype = bool)
+mask01 = np.ones((ntheta1, nxi), dtype = bool)
 mask10 = np.ones((nxi, ntheta1), dtype = bool)
-mask11 = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))[xi_idx_flat,:][:,xi_idx_flat]
+mask11 = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))[~nuisancexi.flatten(),:][:,~nuisancexi.flatten()]
 
 maskj = np.hstack((mask10, mask11))
-maskh = np.vstack((mask00, maskj))
-
-nvar = theta0.size
-ncon = pstationtrue.size
-
-x_L = np.array([pyipopt.NLP_LOWER_BOUND_INF]*nvar, dtype=float)
-x_U = np.array([pyipopt.NLP_UPPER_BOUND_INF]*nvar, dtype=float)        
-g_L = g_U = pstationtrue
-nnzj = maskj.sum()
-nnzh = maskh.sum()    
-idxrj, idxcj = np.mgrid[:ncon,:nvar]
-idxrh, idxch = np.mgrid[:nvar,:nvar]    
-
-eval_j = lambda t, f: (idxrj[maskj], idxcj[maskj]) if f else jac(t)[maskj]
-eval_h = lambda t, l, o, f: (idxrh[maskh], idxch[maskh]) if f else hess_constr(t,l,o)[maskh]
+maskh = np.hstack((np.vstack((mask00, mask10)), np.vstack((mask01, mask11))))
 
 def solve_constr(theta0, use_hess = False):
     pyipopt.set_loglevel(1)    
+    n = theta0.size    
+    x_L = np.array([pyipopt.NLP_LOWER_BOUND_INF]*n, dtype=float)
+    x_U = np.array([pyipopt.NLP_UPPER_BOUND_INF]*n, dtype=float)        
+    ncon = pstationtrue.size
+    g_L = g_U = pstationtrue    
+    nnzj = maskj.sum()
+    nnzh = maskh.sum()    
+    idxrj, idxcj = np.mgrid[:ncon, :n]
+    idxrh, idxch = np.mgrid[:n, :n]    
+    eval_c = lambda t: constr(t)
+    eval_j = lambda t, f: (idxrj[maskj], idxcj[maskj]) if f else np.squeeze(jab(t))[maskj]
     if use_hess:
-        nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, grad, constr, eval_j, eval_h)
+        eval_h = lambda t, l, o, f: (idxrh[maskh], idxch[maskh]) if f else np.squeeze(hess_constr(t,l,o))[maskh]
+        nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j, eval_h)
     else:
-        nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, grad, constr, eval_j)
+        nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j)
     results = nlp.solve(theta0)
     nlp.close()
     return results
@@ -234,9 +236,10 @@ def solve_unconstr(theta0):
     thetahat , _, _, _, _, fval = pyipopt.fmin_unconstrained(
         eval_f,
         theta0,
-        fprime=grad,
-        fhess=hess,
+        fprime=eval_grad,
+        fhess=eval_hess,
     )
+    
     return thetahat
 
 #%%
@@ -274,9 +277,9 @@ def contraction(theta):
 
 
 #%%
-
+#rrr = solve_constr(theta0)
+#
 #thetahat = solve_unconstr(theta0)
-#rrr = solve_constr(thetahat)
 
 #thetahat2 = solve_constr(thetahat)
 #pyipopt.set_loglevel(1)
