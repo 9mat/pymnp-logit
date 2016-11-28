@@ -98,7 +98,9 @@ floatX = 'float64'
 theta  = T.dvector('theta')
 alpha, beta, S, xi = getparams(theta)
     
-V       = T.dot(alpha,Xp)*price + T.dot(beta,X) + xi[:,stationid]
+Tprice  = theano.shared(price.astype(floatX),  name='price')
+
+V       = T.dot(alpha,Xp)*Tprice + T.dot(beta,X) + xi[:,stationid]
 Vfull   = T.concatenate([T.zeros((1, nobs)), V], axis = 0)
 Vchoice = Vfull[(choice-1,np.arange(nobs))]
 Vnorm   = (Vfull - Vchoice)
@@ -279,7 +281,7 @@ def contraction(theta):
 #%%
 #rrr = solve_constr(theta0)
 #
-#thetahat = solve_unconstr(theta0)
+thetahat = solve_unconstr(theta0)
 
 #thetahat2 = solve_constr(thetahat)
 #pyipopt.set_loglevel(1)
@@ -290,5 +292,28 @@ def contraction(theta):
 #    fhess=eval_hess,
 #    )
 #
+
+#%%
+
+
+eval_pallbase = theano.function([theta], pallbase)
+
+#%%
+
+offset = nalpha + nbeta
+Sidx = range(offset, offset + nallsigma)
+Shat = thetahat[Sidx]
+S_split = np.split(np.hstack([[1], Shat]), nsigma+1)
+
+pcf = []
+for g in range(ngroup):
+    Scf = np.tile(S_split[g], ngroup)
+    thetacf = np.array(thetahat)
+    thetacf[Sidx] = Scf[1:]
+    thetacf /= Scf[0]
+    
+    pcf.append(eval_pallbase(thetacf))
+    
+pcfmean = [pp.mean(axis=1) for pp in pcf]
 
 
