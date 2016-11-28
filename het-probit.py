@@ -77,7 +77,7 @@ nxi = (1-nuisancexi).sum()
 xi_idx = np.zeros(nuisancexi.shape, dtype = int) + nxi
 xi_idx[~nuisancexi] = np.arange(nxi)
 
-xi_idx_flat = np.where(~nuisancexi.flatten())
+xi_idx_flat = np.where(~nuisancexi.flatten())[0]
 
 #%%
 tril_index_matrix = np.zeros((ngroup, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
