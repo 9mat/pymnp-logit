@@ -139,14 +139,13 @@ c11 = T.sqrt(Sigma[:,:,1,1] - c10**2)
 
 iii = (choice-1, groupid)
 
-def normcdf(x):
-    return 0.5 + 0.5*T.erf(x/np.sqrt(2))
-                       
-def norminv(p):
-    return np.sqrt(2)*T.erfinv(2*p-1)
+normcdf = lambda x: 0.5 + 0.5*T.erf(x/np.sqrt(2))
+norminv = lambda p: np.sqrt(2)*T.erfinv(2*p-1)
     
 ndraws = 10
-draws = np.random.random((ndraws,nobs))
+#draws = np.random.random((ndraws,nobs))
+
+draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
 
 prob0 = normcdf(-Vnonchoice[0,:]/c00[iii])
 draws1 = norminv(draws*prob0)
@@ -156,11 +155,6 @@ nlogl = -T.log(prob0).sum() - T.log(prob1.sum(axis=0)/ndraws).sum()
 #nlogl = -T.log(prob0).sum()
     
 nlogllogit = T.log(T.sum(T.exp(Vfull), axis=0)).sum() - (Vchoice).sum()
-theta0 = np.zeros((nalpha+nbeta+nsigma,))
-theta0[0] = -20
-theta0[-1] = 0.1
-theta0[-2] = 0.2
-
 obj = nlogl
 eval_f = theano.function([theta], outputs = obj)
 grad = theano.function([theta], outputs = T.grad(obj, [theta]))
@@ -183,7 +177,8 @@ theta0 = np.concatenate([alpha0, beta0, S0, xi0])
 
 Vallbase        = T.dot(M, V)
 p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
-drawsallbase    = np.random.random((ndraws,nchoice,nobs))
+#drawsallbase    = np.random.random((ndraws,nchoice,nobs))
+drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws
 draws1allbase   = norminv(drawsallbase*prob0)
 p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
 
