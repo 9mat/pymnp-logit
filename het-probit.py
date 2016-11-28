@@ -82,12 +82,12 @@ floatX = 'float64'
 theta  = T.dvector('theta')
 alpha, beta, S = getparams(theta)
     
-#Tprice  = theano.shared(price.astype(floatX),  name='price')
+Tprice  = theano.shared(price.astype(floatX),  name='price')
 #TX      = theano.shared(X.astype(floatX),  name='X')
 #TXp     = theano.shared(Xp.astype(floatX), name='Xp')
 #TXhet   = theano.shared(Xhet.astype(floatX), name='Xhet')
 
-V       = (T.dot(alpha,Xp)*price + T.dot(beta,X))
+V       = (T.dot(alpha,Xp)*Tprice + T.dot(beta,X))
 Vfull   = T.concatenate([T.zeros((1, nobs)), V], axis = 0)
 Vchoice = Vfull[(choice-1,np.arange(nobs))]
 Vnorm   = (Vfull - Vchoice)
@@ -162,5 +162,34 @@ thetahat , _, _, _, _, fval = pyipopt.fmin_unconstrained(
     fhess=eval_hess,
     )
 
+
+#%%
+
+Vallbase        = T.dot(M, V)
+p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
+drawsallbase    = np.random.random((ndraws,nchoice,nobs))
+draws1allbase   = norminv(drawsallbase*prob0)
+p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
+
+pallbase = p0allbase*p0allbase
+eval_pallbase = theano.function([theta], pallbase)
+
+#%%
+
+offset = nalpha + nbeta
+Sidx = range(offset, offset + nallsigma)
+Shat = thetahat[Sidx]
+S_split = np.split(np.hstack([[1], Shat]), nsigma+1)
+
+pcf = []
+for g in range(ngroup):
+    Scf = np.tile(S_split[g], ngroup)
+    thetacf = np.array(thetahat)
+    thetacf[Sidx] = Scf[1:]
+    thetacf /= Scf[0]
+    
+    pcf.append(eval_pallbase(thetacf))
+    
+pcfmean = [pp.mean(axis=1) for pp in pcf]
 
 
