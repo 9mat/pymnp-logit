@@ -169,11 +169,11 @@ theta0 = np.concatenate([alpha0, beta0, S0, xi0])
 #%%
 
 Vallbase        = T.dot(M[1:,:,:], V)
-p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
+p0allbase       = normcdf(-Vallbase[:,0,:]/c00[1:,groupid])
 #drawsallbase    = np.random.random((ndraws,nchoice,nobs))
-drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws
+drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice-1,1)).transpose() + 0.5)/ndraws
 draws1allbase   = norminv(drawsallbase*prob0)
-p1allbase       = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
+p1allbase       = normcdf(-(Vallbase[:,1,:] + c10[1:,groupid]*draws1allbase)/c11[1:,groupid]).mean(axis=0)
 
 pallbase = p0allbase*p0allbase
 
@@ -285,8 +285,8 @@ def contraction(theta):
 
 #%%
 
-thetahat = solve_unconstr(theta0)
-rrr = solve_constr(thetahat)
+#thetahat = solve_unconstr(theta0)
+#rrr = solve_constr(thetahat)
 
 #thetahat2 = solve_constr(thetahat)
 #pyipopt.set_loglevel(1)
