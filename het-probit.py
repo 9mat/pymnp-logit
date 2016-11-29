@@ -154,8 +154,8 @@ eval_hess = lambda t: np.squeeze(hess(t))
 
 #%%
 alpha0 = [-5.63116686]
-beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995, -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
-         -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098, -0.051455999185487045, -0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
+beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995, #-0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
+         -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098, -0.051455999185487045] #-0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
 gamma0 = [-0.10, -0.05]
 S0 = [0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
 xi0 = np.zeros((nxi,))
@@ -305,15 +305,33 @@ Sidx = range(offset, offset + nallsigma)
 Shat = thetahat[Sidx]
 S_split = np.split(np.hstack([[1], Shat]), nsigma+1)
 
-pcf = []
-for g in range(ngroup):
-    Scf = np.tile(S_split[g], ngroup)
-    thetacf = np.array(thetahat)
-    thetacf[Sidx] = Scf[1:]
-    thetacf /= Scf[0]
-    
-    pcf.append(eval_pallbase(thetacf))
-    
-pcfmean = [pp.mean(axis=1) for pp in pcf]
+pratiocf = np.linspace(0.7, 1.3)
+pcfmean = []
 
+for pr in pratiocf:
+    pricecf= np.array(price)
+    pricecf[0,:] = np.log(pr)
+    Tprice.set_value(pricecf)
+    pcf = []
+    for g in range(ngroup):
+        Scf = np.tile(S_split[g], ngroup)
+        thetacf = np.array(thetahat)
+        thetacf[Sidx] = Scf[1:]
+        thetacf /= Scf[0]
+        
+        pcf.append(eval_pallbase(thetacf))
+        
+    pcfmean.append([pp.mean(axis=1) for pp in pcf])
+    
+pcfmeannp = np.array(pcfmean)
 
+#%%
+
+import matplotlib.pyplot as plt
+
+plt.plot(pratiocf, pcfmeannp[:,0,0])
+plt.plot(pratiocf, pcfmeannp[:,1,0])
+plt.show()
+
+plt.plot(pratiocf, pcfmeannp[:,1,0] - pcfmeannp[:,0,0])
+plt.show()
