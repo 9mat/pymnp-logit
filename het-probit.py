@@ -335,3 +335,70 @@ plt.show()
 
 plt.plot(pratiocf, pcfmeannp[:,1,0] - pcfmeannp[:,0,0])
 plt.show()
+
+#%%
+covhat = np.linalg.pinv(eval_hess(thetahat))
+sehat = np.sqrt(np.diag(covhat))
+tstat = thetahat/sehat
+
+#%%
+
+i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int)
+i2 = np.repeat(np.arange(ngroup, dtype=int), nchoice-1)[1:]
+i3 = np.tile(np.arange(nchoice-1, dtype=int), ngroup)[1:]
+iii = (i1,i2,i3,i3)
+
+dSigma = T.jacobian(T.log(Sigma[iii]), [theta])[0]
+dSigmahat = theano.function([theta], dSigma)(thetahat)
+
+alphahat = theano.function([theta], alpha)(thetahat)
+betahat = theano.function([theta], beta)(thetahat)
+Sigmahat = theano.function([theta], Sigma)(thetahat)
+
+covSigmahat = np.dot(np.dot(dSigmahat, covhat), dSigmahat.transpose())
+seSigmahat = np.sqrt(np.diag(covSigmahat))
+tstatSigmahat = Sigmahat[iii]/seSigmahat
+
+Sigmase = np.zeros(Sigmahat.shape)
+Sigmase[iii] = seSigmahat
+Sigmatstat = np.log(Sigmahat)/Sigmase
+
+alphase = theano.function([theta], alpha)(sehat)
+betase = theano.function([theta], beta)(sehat)
+
+alphatstat = theano.function([theta], alpha)(tstat)
+betatstat = theano.function([theta], beta)(tstat)
+
+choicelbls = ['ethanol', 'midgrade gasoline']
+
+formatstr = "%30s%10.3f%10.3f%10.3f"
+formatstr2 = "%30s%10.3f%10s%10s"
+divider = '*'*(30+10+10+10)
+divider2 = '-'*(30+10+10+10)
+print divider
+print "%30s%10s%10s%10s" % ('', 'coeff', 'se', 't')
+print (' '*30 + '-'*30)
+print '*** price sensitiviy ***'
+for i in range(len(Xplbls)):
+    print formatstr % (Xplbls[i], thetahat[i], sehat[i], tstat[i])
+print divider
+    
+for j in range(nchoice-1):
+    if j > 0:
+        print divider2
+    print "***", choicelbls[j], "***"
+    for i in range(len(Xlbls)):
+        print formatstr % (Xlbls[i], betahat[j,i], betase[j,i], betatstat[j,i])
+i = 0
+print divider
+for j in range(nchoice-1):
+    if j > 0:
+        print divider2
+    print "*** Variance of error of", choicelbls[j], "***"
+    for k in range(ngroup):
+        if j==0 and k == 0:
+            print formatstr2 % ("Treatment" + str(k), 1, '-','-')
+            continue
+        print formatstr % ("Treatment" + str(k), np.log(Sigmahat[0,k,j,j]), Sigmase[0,k,j,j], Sigmatstat[0,k,j,j], )
+        i+=1
+print divider
