@@ -32,16 +32,18 @@ Xlbls =     [
       "dv_ctb", 
       "dv_bh", 
       "dv_rec", 
-      "const"
+      "const",
     ]
+    
+df['group'] = df['treattype'] + df['dv_carpriceadj_p75p100']*3
 
-Xplbls = ['const']
+Xplbls = ['const', 'dv_carpriceadj_p75p100', 'dv_somecollege', 'dv_usageveh_p75p100']
 
 choice  = df['choice'].as_matrix()
 price   = df.loc[:, pricelbls].as_matrix().transpose()
 X       = df.loc[:, Xlbls].as_matrix().transpose()
 Xp      = df.loc[:, Xplbls].as_matrix().transpose()
-groupid = df.loc[:, 'treattype'].as_matrix().transpose()
+groupid = df.loc[:, 'group'].as_matrix().transpose()
 
 nX, nXp, nchoice  = len(Xlbls), len(Xplbls), len(pricelbls) + 1
 
@@ -144,11 +146,12 @@ eval_hess = lambda t: np.squeeze(hess(t))
 
 
 #%%
-alpha0 = [-5.63116686]
-beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995, -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
+alpha0 = [-5.63116686, 0, 0, 0 ,0]
+beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995, -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881
          -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098, -0.051455999185487045, -0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
 gamma0 = [-0.10, -0.05]
-S0 = [0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
+S0 = [0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456,
+      1.0, 0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
 
 theta0 = np.concatenate([alpha0, beta0, S0])
 
@@ -162,5 +165,70 @@ thetahat , _, _, _, _, fval = pyipopt.fmin_unconstrained(
     fhess=eval_hess,
     )
 
+#%%
+covhat = np.linalg.pinv(eval_hess(thetahat))
+sehat = np.sqrt(np.diag(covhat))
+tstat = thetahat/sehat
 
+#%%
 
+iii = ((0,0,0,0,0), (1,2,0,1,2), (0,0,1,1,1), (0,0,1,1,1))
+i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int)
+i2 = np.repeat(np.arange(ngroup, dtype=int), nchoice-1)[1:]
+i3 = np.tile(np.arange(nchoice-1, dtype=int), ngroup)[1:]
+iii = (i1,i2,i3,i3)
+
+dSigma = T.jacobian(T.log(Sigma[iii]), [theta])[0]
+dSigmahat = theano.function([theta], dSigma)(thetahat)
+
+alphahat = theano.function([theta], alpha)(thetahat)
+betahat = theano.function([theta], beta)(thetahat)
+Sigmahat = theano.function([theta], Sigma)(thetahat)
+
+covSigmahat = np.dot(np.dot(dSigmahat, covhat), dSigmahat.transpose())
+seSigmahat = np.sqrt(np.diag(covSigmahat))
+tstatSigmahat = Sigmahat[iii]/seSigmahat
+
+Sigmase = np.zeros(Sigmahat.shape)
+Sigmase[iii] = seSigmahat
+Sigmatstat = np.log(Sigmahat)/Sigmase
+
+alphase = theano.function([theta], alpha)(sehat)
+betase = theano.function([theta], beta)(sehat)
+
+alphatstat = theano.function([theta], alpha)(tstat)
+betatstat = theano.function([theta], beta)(tstat)
+
+choicelbls = ['ethanol', 'midgrade gasoline']
+
+formatstr = "%30s%10.3f%10.3f%10.3f"
+formatstr2 = "%30s%10.3f%10s%10s"
+divider = '*'*(30+10+10+10)
+divider2 = '-'*(30+10+10+10)
+print divider
+print "%30s%10s%10s%10s" % ('', 'coeff', 'se', 't')
+print (' '*30 + '-'*30)
+print '*** price sensitiviy ***'
+for i in range(len(Xplbls)):
+    print formatstr % (Xplbls[i], thetahat[i], sehat[i], tstat[i])
+print divider
+    
+for j in range(nchoice-1):
+    if j > 0:
+        print divider2
+    print "***", choicelbls[j], "***"
+    for i in range(len(Xlbls)):
+        print formatstr % (Xlbls[i], betahat[j,i], betase[j,i], betatstat[j,i])
+i = 0
+print divider
+for j in range(nchoice-1):
+    if j > 0:
+        print divider2
+    print "*** Variance of error of", choicelbls[j], "***"
+    for k in range(ngroup):
+        if j==0 and k == 0:
+            print formatstr2 % ("Treatment" + str(k), 1, '-','-')
+            continue
+        print formatstr % ("Treatment" + str(k), np.log(Sigmahat[0,k,j,j]), Sigmase[0,k,j,j], Sigmatstat[0,k,j,j], )
+        i+=1
+print divider
