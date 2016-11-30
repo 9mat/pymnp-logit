@@ -21,9 +21,13 @@ with open(specname + '.json', 'r') as f:
     Xplbls = lbls['Xp']
     pricelbls = lbls['price']
     grouplbls = lbls['group']
+    
+    
 
 df = pd.read_csv(inputfile)
-
+#df['group'] = df['treattype'] + df['unstable']*3
+#grouplbls = 'group'
+#
 # make sure there is const in the data
 df['const'] = 1
 
@@ -42,7 +46,6 @@ nbeta   = nX*(nchoice-1)
 nsigma  = (nchoice-1)*nchoice/2 - 1
 
 nobs    = df.shape[0]
-ndraw   = 10
 ngroup  = np.unique(groupid).size
 
 nallsigma = (nsigma+1)*ngroup - 1
@@ -130,7 +133,7 @@ iii = (choice-1, groupid)
 normcdf = lambda x: 0.5 + 0.5*T.erf(x/np.sqrt(2))
 norminv = lambda p: np.sqrt(2)*T.erfinv(2*p-1)
     
-ndraws = 10
+ndraws = 50
 #draws = np.random.random((ndraws,nobs))
 
 draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
@@ -154,10 +157,12 @@ eval_hess = lambda t: np.squeeze(hess(t))
 
 #%%
 alpha0 = [-5.63116686]
-beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995, #-0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
-         -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098, -0.051455999185487045] #-0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
+beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, #-0.050698241761471995, -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
+         -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098]#, -0.051455999185487045]#, -0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
 gamma0 = [-0.10, -0.05]
 S0 = [0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
+      #1,0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456,
+      #1,0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
 xi0 = np.zeros((nxi,))
 theta0 = np.concatenate([alpha0, beta0, S0, xi0])
 
@@ -279,9 +284,10 @@ def contraction(theta):
 
 
 #%%
-#rrr = solve_constr(theta0)
+rrr = solve_constr(theta0)
+thetahat = rrr[0]
 #
-thetahat = solve_unconstr(theta0)
+#thetahat = solve_unconstr(theta0)
 
 #thetahat2 = solve_constr(thetahat)
 #pyipopt.set_loglevel(1)
@@ -294,52 +300,73 @@ thetahat = solve_unconstr(theta0)
 #
 
 #%%
-
-
-eval_pallbase = theano.function([theta], pallbase)
-
-#%%
-
-offset = nalpha + nbeta
-Sidx = range(offset, offset + nallsigma)
-Shat = thetahat[Sidx]
-S_split = np.split(np.hstack([[1], Shat]), nsigma+1)
-
-pratiocf = np.linspace(0.7, 1.3)
-pcfmean = []
-
-for pr in pratiocf:
-    pricecf= np.array(price)
-    pricecf[0,:] = np.log(pr)
-    Tprice.set_value(pricecf)
-    pcf = []
-    for g in range(ngroup):
-        Scf = np.tile(S_split[g], ngroup)
-        thetacf = np.array(thetahat)
-        thetacf[Sidx] = Scf[1:]
-        thetacf /= Scf[0]
-        
-        pcf.append(eval_pallbase(thetacf))
-        
-    pcfmean.append([pp.mean(axis=1) for pp in pcf])
-    
-pcfmeannp = np.array(pcfmean)
-
-#%%
-
-import matplotlib.pyplot as plt
-
-plt.plot(pratiocf, pcfmeannp[:,0,0])
-plt.plot(pratiocf, pcfmeannp[:,1,0])
-plt.show()
-
-plt.plot(pratiocf, pcfmeannp[:,1,0] - pcfmeannp[:,0,0])
-plt.show()
+#
+#
+#eval_pallbase = theano.function([theta], pallbase)
+#
+##%%
+#
+#offset = nalpha + nbeta
+#Sidx = range(offset, offset + nallsigma)
+#Shat = thetahat[Sidx]
+#S_split = np.split(np.hstack([[1], Shat]), nsigma+1)
+#
+#pratiocf = np.linspace(0.7, 1.3)
+#pcfmean = []
+#
+#for pr in pratiocf:
+#    pricecf= np.array(price)
+#    pricecf[0,:] = np.log(pr)
+#    Tprice.set_value(pricecf)
+#    pcf = []
+#    for g in range(ngroup):
+#        Scf = np.tile(S_split[g], ngroup)
+#        thetacf = np.array(thetahat)
+#        thetacf[Sidx] = Scf[1:]
+#        thetacf /= Scf[0]
+#        
+#        pcf.append(eval_pallbase(thetacf))
+#        
+#    pcfmean.append([pp.mean(axis=1) for pp in pcf])
+#    
+#pcfmeannp = np.array(pcfmean)
+#
+##%%
+#
+#import matplotlib.pyplot as plt
+#
+#plt.plot(pratiocf, pcfmeannp[:,0,0])
+#plt.plot(pratiocf, pcfmeannp[:,1,0])
+#plt.show()
+#
+#plt.plot(pratiocf, pcfmeannp[:,1,0] - pcfmeannp[:,0,0])
+#plt.show()
 
 #%%
 covhat = np.linalg.pinv(eval_hess(thetahat))
+lnprob = T.log(prob0) + T.log(prob1.mean(axis=0))
+dlnprob = T.jacobian(lnprob, [theta])[0]
+
+#%%
+G = theano.function([theta], dlnprob)(thetahat)
+covhat = np.linalg.pinv(np.dot(G.transpose(), G))
 sehat = np.sqrt(np.diag(covhat))
 tstat = thetahat/sehat
+
+#%%
+dnlogf = T.grad(nlogl, [theta])[0]
+jac = T.jacobian(pstation, [theta])[0].transpose()
+dnlogfstar = dnlogf[:ntheta1] - T.dot(T.dot(jac[:ntheta1,:],T.nlinalg.matrix_inverse(jac[ntheta1:,:])), dnlogf[ntheta1:])
+d2nlogfstar = T.jacobian(dnlogfstar, [theta])[0]
+
+d2nlogfstarf = theano.function([theta], d2nlogfstar)
+
+#%%
+print 'calculating the covariance matrix'
+covhat = np.linalg.pinv(d2nlogfstarf(thetahat))
+sehat = np.sqrt(np.diag(covhat))
+tstat = thetahat/sehat
+print 'done cov'
 
 #%%
 
@@ -354,6 +381,7 @@ dSigmahat = theano.function([theta], dSigma)(thetahat)
 alphahat = theano.function([theta], alpha)(thetahat)
 betahat = theano.function([theta], beta)(thetahat)
 Sigmahat = theano.function([theta], Sigma)(thetahat)
+
 
 covSigmahat = np.dot(np.dot(dSigmahat, covhat), dSigmahat.transpose())
 seSigmahat = np.sqrt(np.diag(covSigmahat))
