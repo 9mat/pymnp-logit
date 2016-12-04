@@ -79,6 +79,7 @@ tril_index = np.vstack([np.repeat(np.arange(ngroup), nsigma+1),
 
 tril_index_matrix[tril_index] = np.arange(nallsigma+1)
 
+np.random.seed(1234)
 
 floatX = 'float64'
 theta  = T.dvector('theta')
@@ -143,9 +144,7 @@ draws1 = norminv(draws*prob0)
 prob1 = normcdf(-(Vnonchoice[1,:] + c10[iii]*draws1)/c11[iii])
 
 nlogl = -T.log(prob0).sum() - T.log(prob1.sum(axis=0)/ndraws).sum()
-#nlogl = -T.log(prob0).sum()
-    
-nlogllogit = T.log(T.sum(T.exp(Vfull), axis=0)).sum() - (Vchoice).sum()
+
 obj = nlogl
 eval_f = theano.function([theta], outputs = obj)
 grad = theano.function([theta], outputs = T.grad(obj, [theta]))
@@ -325,6 +324,13 @@ if use_fe and use_share_moments:
     d2nlogfstar = T.jacobian(dnlogfstar, [theta])[0]    
     d2nlogfstarf = theano.function([theta], d2nlogfstar)
 
+def get_stat(f, thetahat):
+    fhat = theano.function([theta], f)(thetahat)
+    dfhat = theano.function([theta], T.jacobian(f, [theta])[0])(thetahat)
+    fhatcov = np.dot(np.dot(dfhat, covhat), dfhat.transpose())
+    fse = np.sqrt(np.diag(fhatcov))
+    ftstat = fhat/fse
+    return fhat, fse, ftstat
     print 'calculating the covariance matrix'
     covhat = np.linalg.pinv(d2nlogfstarf(thetahat))
     sehat = np.sqrt(np.diag(covhat))
@@ -338,27 +344,22 @@ i2 = np.repeat(np.arange(ngroup, dtype=int), nchoice-1)[1:]
 i3 = np.tile(np.arange(nchoice-1, dtype=int), ngroup)[1:]
 iii = (i1,i2,i3,i3)
 
-dSigma = T.jacobian(T.log(Sigma[iii]), [theta])[0]
-dSigmahat = theano.function([theta], dSigma)(thetahat)
+alphahat, alphase, alphatstat = get_stat(alpha, thetahat)
+betahat, betase, betatstat = get_stat(alpha, thetahat)
 
-alphahat = theano.function([theta], alpha)(thetahat)
-betahat = theano.function([theta], beta)(thetahat)
-Sigmahat = theano.function([theta], Sigma)(thetahat)
+i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int) # base alternative = 0
+i2 = np.tile(np.arange(ngroup, dtype=int), nchoice-1)[1:] # groupid
+i3 = np.repeat(np.arange(nchoice-1, dtype=int), ngroup)[1:] # variance (diagonal element of each choice)
+iii = (i1,i2,i3,i3)
+Sigmamain = Sigma[iii]
 
+import scipy
+mm = np.hstack((-np.ones((nchoice-1,1)), np.eye(nchoice-1)))
+mm = scipy.linalg.block_diag(np.eye(nchoice-1), *([mm]*(nchoice-2)))
+effect = T.dot(mm, T.log(Sigmamain))
 
-covSigmahat = np.dot(np.dot(dSigmahat, covhat), dSigmahat.transpose())
-seSigmahat = np.sqrt(np.diag(covSigmahat))
-tstatSigmahat = Sigmahat[iii]/seSigmahat
-
-Sigmase = np.zeros(Sigmahat.shape)
-Sigmase[iii] = seSigmahat
-Sigmatstat = np.log(Sigmahat)/Sigmase
-
-alphase = theano.function([theta], alpha)(sehat)
-betase = theano.function([theta], beta)(sehat)
-
-alphatstat = theano.function([theta], alpha)(tstat)
-betatstat = theano.function([theta], beta)(tstat)
+Sigmahat, Sigmase, Sigmatstat = get_stat(Sigmamain, thetahat)
+effecthat, effectse, effecttstat = get_stat(effect, thetahat)
 
 choicelbls = ['ethanol', 'midgrade gasoline']
 
@@ -373,23 +374,37 @@ print '*** price sensitiviy ***'
 for i in range(len(Xplbls)):
     print formatstr % (Xplbls[i], thetahat[i], sehat[i], tstat[i])
 print divider
+
+def print_result_row(coeff, se, t, label):
+    print formatstr % (label, coeff, se, t)
+    
+def print_result_group(grouplabel, coeffs, ses, ts, labels):
+    print grouplabel
+    for i in range(len(coeffs)):
+        print_result_row(coeffs[i], ses[i], ts[i], labels[i])
+    print divider2
     
 for j in range(nchoice-1):
-    if j > 0:
-        print divider2
-    print "***", choicelbls[j], "***"
-    for i in range(len(Xlbls)):
-        print formatstr % (Xlbls[i], betahat[j,i], betase[j,i], betatstat[j,i])
-i = 0
-print divider
+    print_result_group("utiltiy of " + choicelbls[j],
+                       betahat[j,:], betase[j,:], betatstat[j,:], Xlbls)
+
+print_result_group("variance of random utility, " + choicelbls[0],
+                   Sigmahat[:ngroup-1], Sigmase[:ngroup-1], Sigmatstat[:ngroup-1],
+                   ["Treatment " + str(j) for j in range(1,ngroup)])
+
+for j in range(1,nchoice-1):
+    idx = range(j*ngroup-1, (j+1)*ngroup-1)
+    print_result_group("variance of random utility, " + choicelbls[j],
+                       Sigmahat[idx], Sigmase[idx], Sigmatstat[idx],
+                       ["Treatment " + str(j) for j in range(ngroup)])
+
+print_result_group("effect on log(variance of random utility, " + choicelbls[0] + ")",
+                   effecthat[:ngroup-1], effectse[:ngroup-1], effect[:ngroup-1],
+                   ["Treatment " + str(j) for j in range(1,ngroup)])
+
 for j in range(nchoice-1):
-    if j > 0:
-        print divider2
-    print "*** Variance of error of", choicelbls[j], "***"
-    for k in range(ngroup):
-        if j==0 and k == 0:
-            print formatstr2 % ("Treatment" + str(k), 1, '-','-')
-            continue
-        print formatstr % ("Treatment" + str(k), np.log(Sigmahat[0,k,j,j]), Sigmase[0,k,j,j], Sigmatstat[0,k,j,j], )
-        i+=1
-print divider
+    idx = range(j*(ngroup,-1) (j+1)*(ngroup-1))
+    print_result_group("effect on log(variance of random utility, " + choicelbls[j] + ")",
+                       effect[idx], effect[idx], effect[idx],
+                       ["Treatment " + str(j) for j in range(1,ngroup)])
+
