@@ -22,7 +22,8 @@ with open(specname + '.json', 'r') as f:
     pricelbls = lbls['price']
     grouplbls = lbls['group']
     
-    
+use_fe = False
+use_share_moments = False
 
 df = pd.read_csv(inputfile)
 #df['group'] = df['treattype'] + df['unstable']*3
@@ -79,31 +80,30 @@ tril_index = np.vstack([np.repeat(np.arange(ngroup), nsigma+1),
 tril_index_matrix[tril_index] = np.arange(nallsigma+1)
 
 
-def getparams(theta, mm=T):
-    offset = 0
-    alpha  = theta[offset: offset + nalpha]
-    
-    offset += nalpha
-    beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
-    
-    offset += nbeta
-    sraw = mm.concatenate([[1], theta[offset: offset + nallsigma], [0]])
-    S = sraw[tril_index_matrix]
-    
-    offset += nallsigma
-    xiraw = mm.concatenate([theta[offset:offset+nxi], [-10000.]])
-    xi = xiraw[xi_idx]
-    
-    return alpha, beta, S, xi
-
 floatX = 'float64'
-
 theta  = T.dvector('theta')
-alpha, beta, S, xi = getparams(theta)
-    
+
+# unpack parameters
+offset = 0
+alpha  = theta[offset: offset + nalpha]
+
+offset += nalpha
+beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
+
+offset += nbeta
+sraw = T.concatenate([[1], theta[offset: offset + nallsigma], [0]])
+S = sraw[tril_index_matrix]
+
 Tprice  = theano.shared(price.astype(floatX),  name='price')
 
-V       = T.dot(alpha,Xp)*Tprice + T.dot(beta,X) + xi[:,stationid]
+if use_fe:
+    offset += nallsigma
+    xiraw = T.concatenate([theta[offset:offset+nxi], [-10000.]])
+    xi = xiraw[xi_idx]
+    V = T.dot(alpha,Xp)*Tprice + T.dot(beta,X) + xi[:,stationid]
+else:
+    V = T.dot(alpha,Xp)*Tprice + T.dot(beta,X)
+
 Vfull   = T.concatenate([T.zeros((1, nobs)), V], axis = 0)
 Vchoice = Vfull[(choice-1,np.arange(nobs))]
 Vnorm   = (Vfull - Vchoice)
@@ -157,69 +157,72 @@ eval_hess = lambda t: np.squeeze(hess(t))
 
 #%%
 alpha0 = [-5.63116686]
-beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, #-0.050698241761471995, -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
-         -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098]#, -0.051455999185487045]#, -0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
-gamma0 = [-0.10, -0.05]
+beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995,# -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
+         -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098, -0.051455999185487045]#, -0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
 S0 = [0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
       #1,0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456,
       #1,0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
-xi0 = np.zeros((nxi,))
-theta0 = np.concatenate([alpha0, beta0, S0, xi0])
+theta0 = np.concatenate([alpha0, beta0, S0])
+
+if use_fe:
+    xi0 = np.zeros((nxi,))
+    theta0 = np.hstack([theta0, xi0])
 
 #%%
 
-Vallbase        = T.dot(M, V)
-p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
-#drawsallbase    = np.random.random((ndraws,nchoice,nobs))
-drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws
-draws1allbase   = norminv(drawsallbase*prob0)
-p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
-
-pallbase = p0allbase*p0allbase
-
-pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
-pstationtrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[~nuisancexi.flatten()]
-               
-obj_multiplier = T.dscalar('obj_multiplier')
-lagrange_multiplier = T.dvector('lagrange_multiplier')
-lagrange = obj_multiplier*obj + (lagrange_multiplier*pstation).sum()
-
-constr = theano.function([theta], pstation)
-jab = theano.function([theta], T.jacobian(pstation, [theta]))
-hess_constr = theano.function([theta, lagrange_multiplier, obj_multiplier], 
-                              outputs=theano.gradient.hessian(lagrange, [theta]))
-
-ntheta1 = nalpha + nbeta + nallsigma
-nxifull = (nchoice-1)*nstation
-mask00 = np.ones((ntheta1, ntheta1), dtype = bool)
-mask01 = np.ones((ntheta1, nxi), dtype = bool)
-mask10 = np.ones((nxi, ntheta1), dtype = bool)
-mask11 = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))[~nuisancexi.flatten(),:][:,~nuisancexi.flatten()]
-
-maskj = np.hstack((mask10, mask11))
-maskh = np.hstack((np.vstack((mask00, mask10)), np.vstack((mask01, mask11))))
-
-def solve_constr(theta0, use_hess = False):
-    pyipopt.set_loglevel(1)    
-    n = theta0.size    
-    x_L = np.array([pyipopt.NLP_LOWER_BOUND_INF]*n, dtype=float)
-    x_U = np.array([pyipopt.NLP_UPPER_BOUND_INF]*n, dtype=float)        
-    ncon = pstationtrue.size
-    g_L = g_U = pstationtrue    
-    nnzj = maskj.sum()
-    nnzh = maskh.sum()    
-    idxrj, idxcj = np.mgrid[:ncon, :n]
-    idxrh, idxch = np.mgrid[:n, :n]    
-    eval_c = lambda t: constr(t)
-    eval_j = lambda t, f: (idxrj[maskj], idxcj[maskj]) if f else np.squeeze(jab(t))[maskj]
-    if use_hess:
-        eval_h = lambda t, l, o, f: (idxrh[maskh], idxch[maskh]) if f else np.squeeze(hess_constr(t,l,o))[maskh]
-        nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j, eval_h)
-    else:
-        nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j)
-    results = nlp.solve(theta0)
-    nlp.close()
-    return results
+if use_fe and use_share_moments:
+    Vallbase        = T.dot(M, V)
+    p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
+    #drawsallbase    = np.random.random((ndraws,nchoice,nobs))
+    drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws
+    draws1allbase   = norminv(drawsallbase*prob0)
+    p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
+    
+    pallbase = p0allbase*p0allbase
+    
+    pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
+    pstationtrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[~nuisancexi.flatten()]
+                   
+    obj_multiplier = T.dscalar('obj_multiplier')
+    lagrange_multiplier = T.dvector('lagrange_multiplier')
+    lagrange = obj_multiplier*obj + (lagrange_multiplier*pstation).sum()
+    
+    constr = theano.function([theta], pstation)
+    jab = theano.function([theta], T.jacobian(pstation, [theta]))
+    hess_constr = theano.function([theta, lagrange_multiplier, obj_multiplier], 
+                                  outputs=theano.gradient.hessian(lagrange, [theta]))
+    
+    ntheta1 = nalpha + nbeta + nallsigma
+    nxifull = (nchoice-1)*nstation
+    mask00 = np.ones((ntheta1, ntheta1), dtype = bool)
+    mask01 = np.ones((ntheta1, nxi), dtype = bool)
+    mask10 = np.ones((nxi, ntheta1), dtype = bool)
+    mask11 = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))[~nuisancexi.flatten(),:][:,~nuisancexi.flatten()]
+    
+    maskj = np.hstack((mask10, mask11))
+    maskh = np.hstack((np.vstack((mask00, mask10)), np.vstack((mask01, mask11))))
+    
+    def solve_constr(theta0, use_hess = False):
+        pyipopt.set_loglevel(1)    
+        n = theta0.size    
+        x_L = np.array([pyipopt.NLP_LOWER_BOUND_INF]*n, dtype=float)
+        x_U = np.array([pyipopt.NLP_UPPER_BOUND_INF]*n, dtype=float)        
+        ncon = pstationtrue.size
+        g_L = g_U = pstationtrue    
+        nnzj = maskj.sum()
+        nnzh = maskh.sum()    
+        idxrj, idxcj = np.mgrid[:ncon, :n]
+        idxrh, idxch = np.mgrid[:n, :n]    
+        eval_c = lambda t: constr(t)
+        eval_j = lambda t, f: (idxrj[maskj], idxcj[maskj]) if f else np.squeeze(jab(t))[maskj]
+        if use_hess:
+            eval_h = lambda t, l, o, f: (idxrh[maskh], idxch[maskh]) if f else np.squeeze(hess_constr(t,l,o))[maskh]
+            nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j, eval_h)
+        else:
+            nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j)
+        results = nlp.solve(theta0)
+        nlp.close()
+        return results
     
 #%%
 def findiff(f, x):
@@ -249,56 +252,17 @@ def solve_unconstr(theta0):
     
     return thetahat
 
-#%%
-
-def contraction(theta):
-    x = np.array(theta)
-    xihat = np.array(x[-nxi:])
-    
-    toler = 1e-13
-    convergent = False
-    share = lambda t: np.squeeze(constr(t))
-    
-    i = 1
-    
-    error = 1
-        
-    while not convergent:
-        xihatold = np.array(xihat)
-        x[-nxi:] = xihat
-        
-        ss = share(x)
-        ss[ss<1e-40]=1e-40
-#        xihat -= 0.2*(np.log(ss) - np.log(pstationtrue.flatten()))
-        xihat -= 0.9*(norm.ppf(ss/(1+ss)) - norm.ppf(pstationtrue/(1+pstationtrue)))
-        error = np.abs(xihat-xihatold).max()
-        print xihat-xihatold
-        print "iter", i, "error =", error
-        convergent = error < toler
-                
-        i += 1
-        if i > 5000:
-            break
-        
-    return x
-
 
 #%%
-rrr = solve_constr(theta0)
-thetahat = rrr[0]
-#
-#thetahat = solve_unconstr(theta0)
+thetahat = solve_unconstr(theta0)
 
-#thetahat2 = solve_constr(thetahat)
-#pyipopt.set_loglevel(1)
-#thetahat , _, _, _, _, fval = pyipopt.fmin_unconstrained(
-#    eval_f,
-#    theta0,
-#    fprime=eval_grad,
-#    fhess=eval_hess,
-#    )
-#
+if use_fe and use_share_moments:
+    result = solve_constr(thetahat)
+    thetahat2 = result[0]
 
+with open('./results/' + specname + '_result.json', 'w') as outfile:
+    json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile)
+    
 #%%
 #
 #
@@ -354,19 +318,18 @@ sehat = np.sqrt(np.diag(covhat))
 tstat = thetahat/sehat
 
 #%%
-dnlogf = T.grad(nlogl, [theta])[0]
-jac = T.jacobian(pstation, [theta])[0].transpose()
-dnlogfstar = dnlogf[:ntheta1] - T.dot(T.dot(jac[:ntheta1,:],T.nlinalg.matrix_inverse(jac[ntheta1:,:])), dnlogf[ntheta1:])
-d2nlogfstar = T.jacobian(dnlogfstar, [theta])[0]
+if use_fe and use_share_moments:
+    dnlogf = T.grad(nlogl, [theta])[0]
+    jac = T.jacobian(pstation, [theta])[0].transpose()
+    dnlogfstar = dnlogf[:ntheta1] - T.dot(T.dot(jac[:ntheta1,:],T.nlinalg.matrix_inverse(jac[ntheta1:,:])), dnlogf[ntheta1:])
+    d2nlogfstar = T.jacobian(dnlogfstar, [theta])[0]    
+    d2nlogfstarf = theano.function([theta], d2nlogfstar)
 
-d2nlogfstarf = theano.function([theta], d2nlogfstar)
-
-#%%
-print 'calculating the covariance matrix'
-covhat = np.linalg.pinv(d2nlogfstarf(thetahat))
-sehat = np.sqrt(np.diag(covhat))
-tstat = thetahat/sehat
-print 'done cov'
+    print 'calculating the covariance matrix'
+    covhat = np.linalg.pinv(d2nlogfstarf(thetahat))
+    sehat = np.sqrt(np.diag(covhat))
+    tstat = thetahat/sehat
+    print 'done cov'
 
 #%%
 
