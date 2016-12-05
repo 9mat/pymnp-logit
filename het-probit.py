@@ -5,10 +5,8 @@ import theano.tensor as T
 import theano.gradient
 import theano.tensor.slinalg
 import pyipopt
-import sys
+import scipy
 import json
-
-from scipy.stats import norm
 
 #specname = sys.argv[1]
 specname = 'spec1het'
@@ -22,8 +20,15 @@ with open(specname + '.json', 'r') as f:
     pricelbls = lbls['price']
     grouplbls = lbls['group']
     
-use_fe = False
-use_share_moments = False
+    use_fe = False
+    use_share_moments = False
+    if 'settings' in spec:
+        settings = spec['settings']
+        if 'use_fe' in settings:
+            use_fe = settings['use_fe']
+        if 'use_share_moments' in settings:
+            use_share_moments = settings['use_share_moments']
+    
 
 df = pd.read_csv(inputfile)
 #df['group'] = df['treattype'] + df['unstable']*3
@@ -331,21 +336,11 @@ def get_stat(f, thetahat):
     fse = np.sqrt(np.diag(fhatcov))
     ftstat = fhat/fse
     return fhat, fse, ftstat
-    print 'calculating the covariance matrix'
-    covhat = np.linalg.pinv(d2nlogfstarf(thetahat))
-    sehat = np.sqrt(np.diag(covhat))
-    tstat = thetahat/sehat
-    print 'done cov'
 
 #%%
 
-i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int)
-i2 = np.repeat(np.arange(ngroup, dtype=int), nchoice-1)[1:]
-i3 = np.tile(np.arange(nchoice-1, dtype=int), ngroup)[1:]
-iii = (i1,i2,i3,i3)
-
 alphahat, alphase, alphatstat = get_stat(alpha, thetahat)
-betahat, betase, betatstat = get_stat(alpha, thetahat)
+betahat, betase, betatstat = get_stat(beta.flatten(), thetahat)
 
 i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int) # base alternative = 0
 i2 = np.tile(np.arange(ngroup, dtype=int), nchoice-1)[1:] # groupid
@@ -353,7 +348,6 @@ i3 = np.repeat(np.arange(nchoice-1, dtype=int), ngroup)[1:] # variance (diagonal
 iii = (i1,i2,i3,i3)
 Sigmamain = Sigma[iii]
 
-import scipy
 mm = np.hstack((-np.ones((nchoice-1,1)), np.eye(nchoice-1)))
 mm = scipy.linalg.block_diag(np.eye(nchoice-1), *([mm]*(nchoice-2)))
 effect = T.dot(mm, T.log(Sigmamain))
@@ -385,8 +379,9 @@ def print_result_group(grouplabel, coeffs, ses, ts, labels):
     print divider2
     
 for j in range(nchoice-1):
+    idx = range(j*nX, (j+1)*nX)
     print_result_group("utiltiy of " + choicelbls[j],
-                       betahat[j,:], betase[j,:], betatstat[j,:], Xlbls)
+                       betahat[idx], betase[idx], betatstat[idx], Xlbls)
 
 print_result_group("variance of random utility, " + choicelbls[0],
                    Sigmahat[:ngroup-1], Sigmase[:ngroup-1], Sigmatstat[:ngroup-1],
@@ -398,13 +393,9 @@ for j in range(1,nchoice-1):
                        Sigmahat[idx], Sigmase[idx], Sigmatstat[idx],
                        ["Treatment " + str(j) for j in range(ngroup)])
 
-print_result_group("effect on log(variance of random utility, " + choicelbls[0] + ")",
-                   effecthat[:ngroup-1], effectse[:ngroup-1], effect[:ngroup-1],
-                   ["Treatment " + str(j) for j in range(1,ngroup)])
-
 for j in range(nchoice-1):
-    idx = range(j*(ngroup,-1) (j+1)*(ngroup-1))
+    idx = range(j*(ngroup-1), (j+1)*(ngroup-1))
     print_result_group("effect on log(variance of random utility, " + choicelbls[j] + ")",
-                       effect[idx], effect[idx], effect[idx],
+                       effecthat[idx], effectse[idx], effecttstat[idx],
                        ["Treatment " + str(j) for j in range(1,ngroup)])
 
