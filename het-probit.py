@@ -7,9 +7,10 @@ import theano.tensor.slinalg
 import pyipopt
 import scipy
 import json
+import sys
 
-#specname = sys.argv[1]
-specname = 'spec1het'
+specname = sys.argv[1]
+#specname = 'spec1het'
 purpose = 'solve'
 
 with open(specname + '.json', 'r') as f:
