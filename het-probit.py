@@ -10,7 +10,7 @@ import json
 
 #specname = sys.argv[1]
 specname = 'spec1het'
-purpose = 'mfx'
+purpose = 'solve'
 
 with open(specname + '.json', 'r') as f:
     spec = json.load(f)
@@ -32,7 +32,7 @@ with open(specname + '.json', 'r') as f:
     
 df = pd.read_csv(inputfile)
 #df = df.sample(n=100)
-#df['group'] = df['treattype'] + df['unstable']*3
+#df['group'] = df['treattype'] + df['dv_usageveh_p75p100']*3
 #grouplbls = 'group'
 #
 # make sure there is const in the data
@@ -142,7 +142,7 @@ iii = (choice-1, groupid)
 normcdf = lambda x: 0.5 + 0.5*T.erf(x/np.sqrt(2))
 norminv = lambda p: np.sqrt(2)*T.erfinv(2*p-1)
     
-ndraws = 50
+ndraws = 10
 #draws = np.random.random((ndraws,nobs))
 
 draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
@@ -163,22 +163,29 @@ eval_hess = lambda t: np.squeeze(hess(t))
 
 
 #%%
-alpha0 = [-5.63116686]
-beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995,# -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
-         -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098, -0.051455999185487045]#, -0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
-S0 = [0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
-      #1,0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456,
-      #1,0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
-theta0 = np.concatenate([alpha0, beta0, S0])
+#alpha0 = [-5.63116686]
+#beta0 = [-0.14276449833885524, 0.07799550939333146, 0.0690886479616759, -0.031114683614026983, -0.09391731389704802, -0.1269116325321836, -0.09564480677074452, -0.035482238485123836, -0.050698241761471995,# -0.03731223127056641, -0.7783360705348067, -0.5328394135746228, 1.6107622200281881, 
+#         -0.1383741971290979, 0.16894742379408748, 0.33464904615230423, 0.5473575675980583, 0.0022791624344226727, 0.12501040929703963, 0.1474707888708112, 0.10599018593441098, -0.051455999185487045]#, -0.33470501668838093, -0.5669505382552235, -0.7647587714144124, 0.17373775908415154]
+#S0 = [0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
+#      #1,0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456,
+#      #1,0.4389639,1.07280456,1,0.4389639,1.07280456,1,0.4389639,1.07280456]
+#theta0 = np.concatenate([alpha0, beta0, S0])
+#
+#if use_fe:
+#    xi0 = np.zeros((nxi,))
+#    theta0 = np.hstack([theta0, xi0])
 
+S0 = np.tril(np.ones(nchoice-1))*0.5 + np.tril(np.eye(nchoice-1))*0.7
+S0 = np.tile(S0, (ngroup,1,1))[tril_index][1:]
+
+theta0 = np.zeros((nalpha + nbeta,))
+theta0 = np.hstack([theta0, S0])
 if use_fe:
-    xi0 = np.zeros((nxi,))
-    theta0 = np.hstack([theta0, xi0])
-
+    theta0 = np.hstack([theta0, np.zeros((nxi,))])
 #%%
 
 Vallbase        = T.dot(M, V)
-p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
+p0allbase       = T.maximum(normcdf(-Vallbase[:,0,:]/c00[:,groupid]), 1e-8)
 #drawsallbase    = np.random.random((ndraws,nchoice,nobs))
 drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws
 draws1allbase   = norminv(drawsallbase*p0allbase)
@@ -261,7 +268,7 @@ def solve_unconstr(theta0):
 
 #%%
 eval_mean_pallbase = theano.function([theta], pallbase.mean(axis=1))
-eval_dmean_pallbase = theano.function([theta], T.grad(pallbase.mean(),[theta])[0])
+eval_dmean_pallbase = theano.function([theta], T.jacobian(pallbase.mean(axis=1),[theta])[0])
 def cal_marginal_effect(thetahat, TX, X1, X2):
     X0 = TX.get_value()
     TX.set_value(X1)
@@ -271,7 +278,11 @@ def cal_marginal_effect(thetahat, TX, X1, X2):
     share2 = eval_mean_pallbase(thetahat)
     dshare2 = eval_dmean_pallbase(thetahat)
     TX.set_value(X0)
-    return [share2-share1, dshare2-dshare1]
+    effecthat = share2 - share1
+    deffect = dshare2 - dshare1
+    coveffect = np.dot(np.dot(deffect, covhat), deffect.transpose())
+    effectse = np.sqrt(np.diag(coveffect))
+    return [effecthat, effectse]
     
 def cal_marginal_effect_dummies(thetahat, dummyset):
     X1df = df.loc[:, Xlbls].copy()
@@ -306,29 +317,14 @@ def cal_marginal_effect_continuous(thetajat, varset):
 #%%
 if purpose != 'mfx':
     thetahat = solve_unconstr(theta0)
-    
+        
     if use_fe and use_share_moments:
         result = solve_constr(thetahat)
         thetahat2 = result[0]
     
     with open('./results/' + specname + '_result.json', 'w') as outfile:
-        json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile)
+        json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile, indent=2)
     
-#%%
-#marginal_effect_set = {
-#    'female': [{'dv_female':0}, 
-#               {'dv_female':1}],
-#    'college': [{'dv_somesecondary':0, 'dv_somecollege':0},
-#                {'dv_somesecondary':0, 'dv_somecollege':1}]}
-
-marginal_effect_set = spec['marginal_effect_set']                
-marginal_effects = {}
-for mfxcase in marginal_effect_set:
-    if mfxcase['type'] == 'dv':
-        marginal_effects.update(cal_marginal_effect_dummies(thetahat, mfxcase['vars']))
-    else:
-        marginal_effects.update(cal_marginal_effect_continuous(thetahat, mfxcase['vars']))
-
 #%%
 #
 #
@@ -375,21 +371,45 @@ for mfxcase in marginal_effect_set:
 #%%
 covhat = np.linalg.pinv(eval_hess(thetahat))
 lnprob = T.log(prob0) + T.log(prob1.mean(axis=0))
-dlnprob = T.jacobian(lnprob, [theta])[0]
+#dlnprob = T.jacobian(lnprob, [theta])[0]
 
 #%%
-G = theano.function([theta], dlnprob)(thetahat)
-covhat = np.linalg.pinv(np.dot(G.transpose(), G))
+#G = theano.function([theta], dlnprob)(thetahat)
+#covhat = np.linalg.pinv(np.dot(G.transpose(), G))
 sehat = np.sqrt(np.diag(covhat))
 tstat = thetahat/sehat
 
 #%%
-if use_fe and use_share_moments:
-    dnlogf = T.grad(nlogl, [theta])[0]
-    jac = T.jacobian(pstation, [theta])[0].transpose()
-    dnlogfstar = dnlogf[:ntheta1] - T.dot(T.dot(jac[:ntheta1,:],T.nlinalg.matrix_inverse(jac[ntheta1:,:])), dnlogf[ntheta1:])
-    d2nlogfstar = T.jacobian(dnlogfstar, [theta])[0]    
-    d2nlogfstarf = theano.function([theta], d2nlogfstar)
+#marginal_effect_set = {
+#    'female': [{'dv_female':0}, 
+#               {'dv_female':1}],
+#    'college': [{'dv_somesecondary':0, 'dv_somecollege':0},
+#                {'dv_somesecondary':0, 'dv_somecollege':1}]}
+
+if 'marginal_effect_set' in spec:
+    marginal_effect_set = spec['marginal_effect_set']                
+    marginal_effects = {}
+    for mfxcase in marginal_effect_set:
+        if mfxcase['type'] == 'dv':
+            marginal_effects.update(cal_marginal_effect_dummies(thetahat, mfxcase['vars']))
+        else:
+            marginal_effects.update(cal_marginal_effect_continuous(thetahat, mfxcase['vars']))
+            
+    marginal_effects_serialized = {}
+    for k, v in marginal_effects.items():
+        marginal_effects_serialized[k] = [x.tolist() for x in v]
+        
+    with open('./results/' + specname + '_mfx.json', 'w') as outfile:
+        json.dump(marginal_effects_serialized, outfile, indent=2)
+
+
+#%%
+#if use_fe and use_share_moments:
+#    dnlogf = T.grad(nlogl, [theta])[0]
+#    jac = T.jacobian(pstation, [theta])[0].transpose()
+#    dnlogfstar = dnlogf[:ntheta1] - T.dot(T.dot(jac[:ntheta1,:],T.nlinalg.matrix_inverse(jac[ntheta1:,:])), dnlogf[ntheta1:])
+#    d2nlogfstar = T.jacobian(dnlogfstar, [theta])[0]    
+#    d2nlogfstarf = theano.function([theta], d2nlogfstar)
 
 def get_stat(f, thetahat):
     fhat = theano.function([theta], f)(thetahat)
@@ -410,8 +430,8 @@ i3 = np.repeat(np.arange(nchoice-1, dtype=int), ngroup)[1:] # variance (diagonal
 iii = (i1,i2,i3,i3)
 Sigmamain = Sigma[iii]
 
-mm = np.hstack((-np.ones((nchoice-1,1)), np.eye(nchoice-1)))
-mm = scipy.linalg.block_diag(np.eye(nchoice-1), *([mm]*(nchoice-2)))
+mm = np.hstack((-np.ones((2,1)), np.eye(2)))
+mm = scipy.linalg.block_diag(np.eye(2), *([mm]*(ngroup*2/3-1)))
 effect = T.dot(mm, T.log(Sigmamain))
 
 Sigmahat, Sigmase, Sigmatstat = get_stat(Sigmamain, thetahat)
@@ -456,7 +476,7 @@ for j in range(1,nchoice-1):
                        ["Treatment " + str(j) for j in range(ngroup)])
 
 for j in range(nchoice-1):
-    idx = range(j*(ngroup-1), (j+1)*(ngroup-1))
+    idx = range(j*(ngroup*2/3), (j+1)*(ngroup*2/3))
     print_result_group("effect on log(variance of random utility, " + choicelbls[j] + ")",
                        effecthat[idx], effectse[idx], effecttstat[idx],
                        ["Treatment " + str(j) for j in range(1,ngroup)])
