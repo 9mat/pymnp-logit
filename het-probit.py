@@ -396,10 +396,18 @@ if 'marginal_effect_set' in spec:
         else:
             marginal_effects.update(cal_marginal_effect_continuous(thetahat, mfxcase['vars']))
             
+    X1df = df.loc[:, pricelbls].copy()
+    X2df = X1df.copy()
+    X2df -= 0.01
+    X1 = X1df.as_matrix().transpose()
+    X2 = X2df.as_matrix().transpose()
+    ehat, ese = cal_marginal_effect(thetahat, Tprice, X1, X2)
+    marginal_effects['rel_lp_km_adj1'] = [ehat/0.01, ese/0.01]
+    
     marginal_effects_serialized = {}
     for k, v in marginal_effects.items():
         marginal_effects_serialized[k] = [x.tolist() for x in v]
-        
+
     with open('./results/' + specname + '_mfx.json', 'w') as outfile:
         json.dump(marginal_effects_serialized, outfile, indent=2)
 
