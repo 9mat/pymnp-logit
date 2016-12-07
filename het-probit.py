@@ -101,14 +101,16 @@ sraw = T.concatenate([[1], theta[offset: offset + nallsigma], [0]])
 S = sraw[tril_index_matrix]
 
 Tprice  = theano.shared(price.astype(floatX),  name='price')
+TX      = theano.shared(X.astype(floatX),  name='X')
+TXp     = theano.shared(Xp.astype(floatX), name='Xp')
 
 if use_fe:
     offset += nallsigma
     xiraw = T.concatenate([theta[offset:offset+nxi], [-10000.]])
     xi = xiraw[xi_idx]
-    V = T.dot(alpha,Xp)*Tprice + T.dot(beta,X) + xi[:,stationid]
+    V = T.dot(alpha,TXp)*Tprice + T.dot(beta,TX) + xi[:,stationid]
 else:
-    V = T.dot(alpha,Xp)*Tprice + T.dot(beta,X)
+    V = T.dot(alpha,TXp)*Tprice + T.dot(beta,TX)
 
 Vfull   = T.concatenate([T.zeros((1, nobs)), V], axis = 0)
 Vchoice = Vfull[(choice-1,np.arange(nobs))]
@@ -174,16 +176,16 @@ if use_fe:
 
 #%%
 
-if use_fe and use_share_moments:
-    Vallbase        = T.dot(M, V)
-    p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
-    #drawsallbase    = np.random.random((ndraws,nchoice,nobs))
-    drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws
-    draws1allbase   = norminv(drawsallbase*prob0)
-    p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
-    
-    pallbase = p0allbase*p0allbase
-    
+Vallbase        = T.dot(M, V)
+p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
+#drawsallbase    = np.random.random((ndraws,nchoice,nobs))
+drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws
+draws1allbase   = norminv(drawsallbase*prob0)
+p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
+
+pallbase = p0allbase*p0allbase
+
+if use_fe and use_share_moments:    
     pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
     pstationtrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[~nuisancexi.flatten()]
                    
@@ -256,7 +258,20 @@ def solve_unconstr(theta0):
     
     return thetahat
 
-
+#%%
+eval_mean_pallbase = theano.function([theta], pallbase.mean(axis=1))
+eval_dmean_pallbase = theano.function([theta], T.grad(pallbase.mean(),[theta])[0])
+def cal_marginal_effect(thetahat, X1, X2):
+    X0 = TX.get_value()
+    TX.set_value(X1)
+    share1 = eval_mean_pallbase(thetahat)
+    dshare1 = eval_dmean_pallbase(thetahat)
+    TX.set_value(X2)
+    share2 = eval_mean_pallbase(thetahat)
+    dshare2 = eval_dmean_pallbase(thetahat)
+    TX.set_value(X0)
+    return share2-share1, dshare2-dshare1
+    
 #%%
 thetahat = solve_unconstr(theta0)
 
@@ -266,6 +281,27 @@ if use_fe and use_share_moments:
 
 with open('./results/' + specname + '_result.json', 'w') as outfile:
     json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile)
+    
+#%%
+marginal_effect_set = {
+    'female': [{'dv_female':0}, 
+               {'dv_female':1}],
+    'college': [{'dv_somesecondary':0, 'dv_somecollege':0},
+                {'dv_somesecondary':0, 'dv_somecollege':1}]}
+                
+marginal_effects = {}
+for mfxlbl, mfx in marginal_effect_set.items():
+    X1df = df.loc[:, Xlbls].copy()
+    X2df = X1df.copy()
+    if len(mfx) > 1:
+        for xlbl, xval in mfx[0].items():
+            X1df[xlbl] = xval
+        for xlbl, xval in mfx[1].items():
+            X2df[xlbl] = xval
+    else:
+        for xlbl, xval in mfx[0].items():
+            X2df[xlbl] += xval
+    marginal_effects[mfxlbl] = cal_marginal_effect(thetahat, X1df.as_matrix().transpose(), X2df.as_matrix().transpose())
     
 #%%
 #
