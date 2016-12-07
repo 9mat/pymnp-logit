@@ -10,6 +10,7 @@ import json
 
 #specname = sys.argv[1]
 specname = 'spec1het'
+purpose = 'mfx'
 
 with open(specname + '.json', 'r') as f:
     spec = json.load(f)
@@ -29,8 +30,8 @@ with open(specname + '.json', 'r') as f:
         if 'use_share_moments' in settings:
             use_share_moments = settings['use_share_moments']
     
-
 df = pd.read_csv(inputfile)
+#df = df.sample(n=100)
 #df['group'] = df['treattype'] + df['unstable']*3
 #grouplbls = 'group'
 #
@@ -180,10 +181,10 @@ Vallbase        = T.dot(M, V)
 p0allbase       = normcdf(-Vallbase[:,0,:]/c00[:,groupid])
 #drawsallbase    = np.random.random((ndraws,nchoice,nobs))
 drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws
-draws1allbase   = norminv(drawsallbase*prob0)
+draws1allbase   = norminv(drawsallbase*p0allbase)
 p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
 
-pallbase = p0allbase*p0allbase
+pallbase = p0allbase*p1allbase
 
 if use_fe and use_share_moments:    
     pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
@@ -261,7 +262,7 @@ def solve_unconstr(theta0):
 #%%
 eval_mean_pallbase = theano.function([theta], pallbase.mean(axis=1))
 eval_dmean_pallbase = theano.function([theta], T.grad(pallbase.mean(),[theta])[0])
-def cal_marginal_effect(thetahat, X1, X2):
+def cal_marginal_effect(thetahat, TX, X1, X2):
     X0 = TX.get_value()
     TX.set_value(X1)
     share1 = eval_mean_pallbase(thetahat)
@@ -270,39 +271,64 @@ def cal_marginal_effect(thetahat, X1, X2):
     share2 = eval_mean_pallbase(thetahat)
     dshare2 = eval_dmean_pallbase(thetahat)
     TX.set_value(X0)
-    return share2-share1, dshare2-dshare1
+    return [share2-share1, dshare2-dshare1]
     
-#%%
-thetahat = solve_unconstr(theta0)
-
-if use_fe and use_share_moments:
-    result = solve_constr(thetahat)
-    thetahat2 = result[0]
-
-with open('./results/' + specname + '_result.json', 'w') as outfile:
-    json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile)
-    
-#%%
-marginal_effect_set = {
-    'female': [{'dv_female':0}, 
-               {'dv_female':1}],
-    'college': [{'dv_somesecondary':0, 'dv_somecollege':0},
-                {'dv_somesecondary':0, 'dv_somecollege':1}]}
-                
-marginal_effects = {}
-for mfxlbl, mfx in marginal_effect_set.items():
+def cal_marginal_effect_dummies(thetahat, dummyset):
     X1df = df.loc[:, Xlbls].copy()
-    X2df = X1df.copy()
-    if len(mfx) > 1:
-        for xlbl, xval in mfx[0].items():
-            X1df[xlbl] = xval
-        for xlbl, xval in mfx[1].items():
-            X2df[xlbl] = xval
-    else:
-        for xlbl, xval in mfx[0].items():
-            X2df[xlbl] += xval
-    marginal_effects[mfxlbl] = cal_marginal_effect(thetahat, X1df.as_matrix().transpose(), X2df.as_matrix().transpose())
+    for d in dummyset: X1df[d] = 0
+    X1 = X1df.as_matrix().transpose()
+    mfx = {}
+    for d in dummyset:
+        X2df = X1df.copy()
+        X2df[d] = 1
+        X2 = X2df.as_matrix().transpose()
+        mfx[d] = cal_marginal_effect(thetahat, TX, X1, X2)
+    return mfx
     
+def cal_marginal_effect_continuous(thetajat, varset):
+    mfx = {}
+    for varname, val in varset.items():
+        if varname in Xlbls:
+            X1df = df.loc[:, Xlbls].copy()
+            tx = TX
+        else:
+            X1df = df.loc[:, pricelbls].copy()
+            tx = Tprice
+        X1 = X1df.as_matrix().transpose()
+        X2df = X1df.copy()
+        X2df[varname] += val
+        X2 = X2df.as_matrix().transpose()
+        mfx[varname] = cal_marginal_effect(thetahat, tx, X1, X2)
+        mfx[varname][0] /= val
+        mfx[varname][1] /= val
+    return mfx
+
+#%%
+if purpose != 'mfx':
+    thetahat = solve_unconstr(theta0)
+    
+    if use_fe and use_share_moments:
+        result = solve_constr(thetahat)
+        thetahat2 = result[0]
+    
+    with open('./results/' + specname + '_result.json', 'w') as outfile:
+        json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile)
+    
+#%%
+#marginal_effect_set = {
+#    'female': [{'dv_female':0}, 
+#               {'dv_female':1}],
+#    'college': [{'dv_somesecondary':0, 'dv_somecollege':0},
+#                {'dv_somesecondary':0, 'dv_somecollege':1}]}
+
+marginal_effect_set = spec['marginal_effect_set']                
+marginal_effects = {}
+for mfxcase in marginal_effect_set:
+    if mfxcase['type'] == 'dv':
+        marginal_effects.update(cal_marginal_effect_dummies(thetahat, mfxcase['vars']))
+    else:
+        marginal_effects.update(cal_marginal_effect_continuous(thetahat, mfxcase['vars']))
+
 #%%
 #
 #
