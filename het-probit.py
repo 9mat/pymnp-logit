@@ -10,8 +10,10 @@ import json
 import sys
 
 specname = sys.argv[1]
-#specname = 'spec1het'
+#specname = 'spec2het'
 purpose = 'solve'
+
+subsample = None
 
 with open(specname + '.json', 'r') as f:
     spec = json.load(f)
@@ -30,14 +32,77 @@ with open(specname + '.json', 'r') as f:
             use_fe = settings['use_fe']
         if 'use_share_moments' in settings:
             use_share_moments = settings['use_share_moments']
+
+    if "subsample" in spec:
+        subsample = spec["subsample"]
     
-df = pd.read_csv(inputfile)
-#df = df.sample(n=100)
-#df['group'] = df['treattype'] + df['dv_usageveh_p75p100']*3
-#grouplbls = 'group'
-#
-# make sure there is const in the data
+print(use_fe)
+with open(inputfile, 'rb') as fi:
+    df = pd.read_stata(fi)
+
+# convert indexing variables to int
+df.treattype = df.treattype.astype(int)
+df.choice = df.choice.astype(int)
+df.consumerid = df.consumerid.astype(int)
+df.stationid = df.stationid.astype(int)
+
+# old coding: 2 = midgrade gasoline, 3 = ethanol
+# new coding: 2 = ethanol, 3 = midgrad gasoline
+choice = df.choice.as_matrix()
+df.loc[choice==3, 'choice']=2
+df.loc[choice==2, 'choice']=3
+
+# drop RJ, drop midgrade ethanol and treatment 3 and 4
+df = df[df.dv_rj==0]
+df = df[df.choice < 4]
+df = df.loc[df.treattype < 3]
+
+# df['treat1'] = df.treattype == 1
+# df['ntreat1'] = df.groupby(['date', 'stationid']).treat1.transform(sum)
+# df = df[df.ntreat1 > 0]
+
+
 df['const'] = 1
+
+# impute missing prices
+df['pgmidgrade_km_adj'].fillna(value=1e9, inplace=True)
+df['pemidgrade_km_adj'].fillna(value=1e9, inplace=True)
+
+# relative prices
+df['rel_lpgmidgrade_km_adj'] = np.log(df.pgmidgrade_km_adj) - np.log(df.pg_km_adj)
+df['rel_lpe_km_adj'] = np.log(df.pe_km_adj) - np.log(df.pg_km_adj)
+
+df['ltank'] = np.log(df.car_tank)
+
+# car brand dummies
+df['gm']   = df.car_make == "GM"
+df['vw']   = df.car_make == "VW"
+df['fiat'] = df.car_make == "FIAT"
+df['ford'] = df.car_make == "FORD"
+
+# car class
+df['dv_carclass_compact'] = df.car_class == "Compact"
+df['dv_carclass_fullsize'] = df.car_class == "Fullsize"
+df['dv_carclass_midsize'] = df.car_class == "Midsize"
+df['dv_carclass_minivan'] = df.car_class == "Minivan"
+df['dv_carclass_suv'] = df.car_class == "SUV"
+df['dv_carclass_smalltruck'] = df.car_class == "Smalltruck"
+df['dv_carclass_subcompact'] = df.car_class == "Subcompact"
+
+df['car_age'] = 2012 - df.car_model_year
+df['car_lprice'] = np.log(df.car_price_adj)
+
+df['dv_carpriceadj_p0p75'] = 1 - df['dv_carpriceadj_p75p100']
+df['dv_usageveh_p0p75'] = 1 - df['dv_usageveh_p75p100']
+df['dv_nocollege'] = 1 - df['dv_somecollege']
+
+if subsample is not None:
+    df = df.loc[df[subsample]==1,:]
+print('Number of observations {}'.format(len(df)))
+
+# generate day of week dummies
+dow_dummies = pd.get_dummies(df['date'].dt.dayofweek, prefix='dv_dow')
+df[dow_dummies.columns[1:]] = dow_dummies[dow_dummies.columns[1:]]
 
 #%%
 
@@ -51,7 +116,7 @@ nX, nXp, nchoice  = len(Xlbls), len(Xplbls), len(pricelbls) + 1
 
 nalpha  = nXp
 nbeta   = nX*(nchoice-1)
-nsigma  = (nchoice-1)*nchoice/2 - 1
+nsigma  = (nchoice-1)*nchoice//2 - 1
 
 nobs    = df.shape[0]
 ngroup  = np.unique(groupid).size
@@ -99,6 +164,8 @@ offset += nalpha
 beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
 
 offset += nbeta
+print(nallsigma)
+print(theta[offset:offset+nallsigma])
 sraw = T.concatenate([[1], theta[offset: offset + nallsigma], [0]])
 S = sraw[tril_index_matrix]
 
@@ -152,7 +219,8 @@ prob0 = normcdf(-Vnonchoice[0,:]/c00[iii])
 draws1 = norminv(draws*prob0)
 prob1 = normcdf(-(Vnonchoice[1,:] + c10[iii]*draws1)/c11[iii])
 
-nlogl = -T.log(prob0).sum() - T.log(prob1.sum(axis=0)/ndraws).sum()
+nlogl_i = -T.log(prob0) - T.log(prob1.sum(axis=0)/ndraws)
+nlogl = nlogl_i.sum()
 
 obj = nlogl
 eval_f = theano.function([theta], outputs = obj)
@@ -287,13 +355,14 @@ def cal_marginal_effect(thetahat, TX, X1, X2):
     
 def cal_marginal_effect_dummies(thetahat, dummyset):
     X1df = df.loc[:, Xlbls].copy()
-    for d in dummyset: X1df[d] = 0
-    X1 = X1df.as_matrix().transpose()
+    for d in dummyset: X1df[d] = 0.0
+    X1 = X1df.as_matrix().astype(np.float64).transpose()
     mfx = {}
     for d in dummyset:
         X2df = X1df.copy()
-        X2df[d] = 1
-        X2 = X2df.as_matrix().transpose()
+        X2df[d] = 1.0
+        X2 = X2df.as_matrix().astype(np.float64).transpose()
+        print('mfx of ' + d)
         mfx[d] = cal_marginal_effect(thetahat, TX, X1, X2)
     return mfx
     
@@ -306,10 +375,10 @@ def cal_marginal_effect_continuous(thetajat, varset):
         else:
             X1df = df.loc[:, pricelbls].copy()
             tx = Tprice
-        X1 = X1df.as_matrix().transpose()
+        X1 = X1df.as_matrix().astype(np.float64).transpose()
         X2df = X1df.copy()
         X2df[varname] += val
-        X2 = X2df.as_matrix().transpose()
+        X2 = X2df.as_matrix().astype(np.float64).transpose()
         mfx[varname] = cal_marginal_effect(thetahat, tx, X1, X2)
         mfx[varname][0] /= val
         mfx[varname][1] /= val
@@ -325,6 +394,11 @@ if purpose != 'mfx':
     
     with open('./results/' + specname + '_result.json', 'w') as outfile:
         json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile, indent=2)
+else:
+    with open('./results/' + specname + '_result.json', 'r') as outfile:
+    	results = json.load(outfile)
+    	thetahat = np.array(results['thetahat'])
+
     
 #%%
 #
@@ -374,6 +448,19 @@ covhat = np.linalg.pinv(eval_hess(thetahat))
 lnprob = T.log(prob0) + T.log(prob1.mean(axis=0))
 #dlnprob = T.jacobian(lnprob, [theta])[0]
 
+jacobian = theano.gradient.jacobian(nlogl_i, theta)
+eval_jab = theano.function([theta], jacobian)
+Jhat = eval_jab(thetahat)
+
+GG = Jhat.transpose().dot(Jhat)
+GGclustered = np.zeros_like(GG)
+for stid in df.stationid.unique():
+    Jsubhat = Jhat[(df.stationid==stid).nonzero()].sum(axis=0)
+    GGclustered += np.outer(Jsubhat, Jsubhat)
+
+covhatclustered = np.matmul(covhat, np.matmul(GGclustered, covhat))
+
+covhat = covhatclustered
 #%%
 #G = theano.function([theta], dlnprob)(thetahat)
 #covhat = np.linalg.pinv(np.dot(G.transpose(), G))
@@ -399,10 +486,10 @@ if 'marginal_effect_set' in spec:
     X1df = df.loc[:, pricelbls].copy()
     X2df = X1df.copy()
     X2df -= 0.01
-    X1 = X1df.as_matrix().transpose()
-    X2 = X2df.as_matrix().transpose()
+    X1 = X1df.as_matrix().astype(np.float64).transpose()
+    X2 = X2df.as_matrix().astype(np.float64).transpose()
     ehat, ese = cal_marginal_effect(thetahat, Tprice, X1, X2)
-    marginal_effects['rel_lp_km_adj1'] = [ehat/0.01, ese/0.01]
+    marginal_effects['rel_lpg_km_adj'] = [ehat/0.01, ese/0.01]
     
     marginal_effects_serialized = {}
     for k, v in marginal_effects.items():
@@ -424,10 +511,13 @@ def get_stat(f, thetahat):
     fhat = theano.function([theta], f)(thetahat)
     dfhat = theano.function([theta], T.jacobian(f, [theta])[0])(thetahat)
     fhatcov = np.dot(np.dot(dfhat, covhat), dfhat.transpose())
-    fse = np.sqrt(np.diag(fhatcov))
+    try:
+        fse = np.sqrt(np.diag(fhatcov))
+    except:
+        fse = np.sqrt(fhatcov)
     ftstat = fhat/fse
     return fhat, fse, ftstat
-
+    
 #%%
 
 alphahat, alphase, alphatstat = get_stat(alpha, thetahat)
@@ -440,7 +530,7 @@ iii = (i1,i2,i3,i3)
 Sigmamain = Sigma[iii]
 
 mm = np.hstack((-np.ones((2,1)), np.eye(2)))
-mm = scipy.linalg.block_diag(np.eye(2), *([mm]*(ngroup*2/3-1)))
+mm = scipy.linalg.block_diag(np.eye(2), *([mm]*(ngroup*2//3-1)))
 effect = T.dot(mm, T.log(Sigmamain))
 
 Sigmahat, Sigmase, Sigmatstat = get_stat(Sigmamain, thetahat)
@@ -452,22 +542,22 @@ formatstr = "%30s%10.3f%10.3f%10.3f"
 formatstr2 = "%30s%10.3f%10s%10s"
 divider = '*'*(30+10+10+10)
 divider2 = '-'*(30+10+10+10)
-print divider
-print "%30s%10s%10s%10s" % ('', 'coeff', 'se', 't')
-print (' '*30 + '-'*30)
-print '*** price sensitiviy ***'
+print(divider)
+print("%30s%10s%10s%10s" % ('', 'coeff', 'se', 't'))
+print(' '*30 + '-'*30)
+print('*** price sensitiviy ***')
 for i in range(len(Xplbls)):
-    print formatstr % (Xplbls[i], thetahat[i], sehat[i], tstat[i])
-print divider
+    print(formatstr % (Xplbls[i], thetahat[i], sehat[i], tstat[i]))
+print(divider)
 
 def print_result_row(coeff, se, t, label):
-    print formatstr % (label, coeff, se, t)
+    print(formatstr % (label, coeff, se, t))
     
 def print_result_group(grouplabel, coeffs, ses, ts, labels):
-    print grouplabel
+    print(grouplabel)
     for i in range(len(coeffs)):
         print_result_row(coeffs[i], ses[i], ts[i], labels[i])
-    print divider2
+    print(divider2)
     
 for j in range(nchoice-1):
     idx = range(j*nX, (j+1)*nX)
@@ -485,7 +575,7 @@ for j in range(1,nchoice-1):
                        ["Treatment " + str(j) for j in range(ngroup)])
 
 for j in range(nchoice-1):
-    idx = range(j*(ngroup*2/3), (j+1)*(ngroup*2/3))
+    idx = range(j*(ngroup*2//3), (j+1)*(ngroup*2//3))
     print_result_group("effect on log(variance of random utility, " + choicelbls[j] + ")",
                        effecthat[idx], effectse[idx], effecttstat[idx],
                        ["Treatment " + str(j) for j in range(1,ngroup)])
