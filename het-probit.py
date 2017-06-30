@@ -96,6 +96,9 @@ df['dv_carpriceadj_p0p75'] = 1 - df['dv_carpriceadj_p75p100']
 df['dv_usageveh_p0p75'] = 1 - df['dv_usageveh_p75p100']
 df['dv_nocollege'] = 1 - df['dv_somecollege']
 
+df['p_ratio'] = df['pe_lt']/df['pg_lt']
+df['e_favor'] = df['p_ratio'] > 0.705
+
 if subsample is not None:
     df = df.loc[df[subsample]==1,:]
 print('Number of observations {}'.format(len(df)))
