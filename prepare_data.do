@@ -59,6 +59,9 @@ gen dv_nocollege = 1 - dv_somecollege
 gen p_ratio = pe_lt/pg_lt
 gen e_favotabr = p_ratio > 0.705
 
+// day of week
+gen dow = dow(date)
+tab dow, gen(dv_dow)
 
 
 // generate a running sequence index for fuel-station fixed effects
