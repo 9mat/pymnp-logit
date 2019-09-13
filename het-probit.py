@@ -4,7 +4,8 @@ import theano
 import theano.tensor as T
 import theano.gradient
 import theano.tensor.slinalg
-import pyipopt
+# import pyipopt
+import ipyopt as pyipopt
 import scipy
 import json
 import sys
