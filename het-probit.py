@@ -328,14 +328,33 @@ def findiff(f, x):
         
     return np.stack(df)
     
+
+def _eval_g(_X, _out):
+    return
+
+def _eval_jac_g(_X, _out):
+    return
+
+_eval_jac_g.sparsity_indices = (numpy.array([]), numpy.array([]))
+
+_eval_h.sparsity_indices = tuple(map(np.array, zip(*[[i,j] for i in range(theta0.size) for j in range(i+1)])))
+
 def solve_unconstr(theta0):
     pyipopt.set_loglevel(1)
-    thetahat , _, _, _, _, fval = pyipopt.fmin_unconstrained(
-        eval_f,
-        theta0,
-        fprime=eval_grad,
-        fhess=eval_hess,
-    )
+    x_L = np.array([pyipopt.NLP_LOWER_BOUND_INF]*n, dtype=float)
+    x_U = np.array([pyipopt.NLP_UPPER_BOUND_INF]*n, dtype=float)        
+    ncon = 0
+    g_L = numpy.array([], dtype=float)
+    g_U = numpy.array([], dtype=float)
+
+    nlp = pyipopt.Problem(theta0.size, x_L, x_U, ncon, g_L, g_U, _eval_jac_g.sparsity_indices, _eval_h.sparsity_indices, eval_f, eval_grad, _eval_g, _eval_jac_g, eval_hess)
+    # thetahat , _, _, _, _, fval = pyipopt.solve(
+    #     eval_f,
+    #     theta0,
+    #     fprime=eval_grad,
+    #     fhess=eval_hess,
+    # )
+    thetahat, _, _ = nlp.solve()
     
     return thetahat
 
