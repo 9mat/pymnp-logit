@@ -232,13 +232,6 @@ grad = theano.function([theta], outputs = T.grad(obj, [theta]))
 hess = theano.function([theta], outputs = theano.gradient.hessian(obj, [theta]))
 
 
-def eval_grad(t, out):
-    out[:] = np.squeeze(grad(t))
-    return out
-
-# eval_grad = lambda t: np.squeeze(grad(t))
-
-eval_hess = lambda t: np.squeeze(hess(t))
 
 
 #%%
@@ -262,6 +255,31 @@ theta0 = np.hstack([theta0, S0])
 if use_fe:
     theta0 = np.hstack([theta0, np.zeros((nxi,))])
 #%%
+
+
+def eval_grad(t, out):
+    out[:] = np.squeeze(grad(t))
+    print("Evaluate grad at ", t)
+    print("grad = ", out)
+    print("="*30)
+    return out
+
+# eval_grad = lambda t: np.squeeze(grad(t))
+hess_sparsity_indices = tuple(map(lambda a: np.array(a, dtype=int), zip(*[[i,j] for i in range(theta0.size) for j in range(i+1)])))
+
+def eval_hess(t, out):
+    h = np.squeeze(hess(t))
+    index_pairs = list(zip(*hess_sparsity_indices))
+
+    for i in range(len(hess_sparsity_indices)):
+        print(index_pairs[i])
+        out[i] = h[index_pairs[i]]
+    print("Evaluate hessian at ", t)
+    print("hess = ", out)
+    print("="*30)
+    return out
+
+# eval_hess = lambda t: np.squeeze(hess(t))
 
 Vallbase        = T.dot(M, V)
 p0allbase       = T.maximum(normcdf(-Vallbase[:,0,:]/c00[:,groupid]), 1e-8)
@@ -343,7 +361,6 @@ def _eval_jac_g(_X, _out):
 
 _eval_jac_g.sparsity_indices = (np.array([]), np.array([]))
 
-eval_hess.sparsity_indices = tuple(map(lambda a: np.array(a, dtype=int), zip(*[[i,j] for i in range(theta0.size) for j in range(i+1)])))
 
 NLP_LOWER_BOUND_INF = -1e19
 NLP_UPPER_BOUND_INF = 1e19
@@ -353,8 +370,13 @@ out = np.array([0]*theta0.size)
 
 print("===== obj value at theta0 =====")
 print(eval_f(theta0))
+
 print("===== gradient at theta0 =====")
 print(eval_grad(theta0, out))
+
+
+print("===== hess at theta0 =====")
+print(eval_hess(theta0, out))
 
 def solve_unconstr(theta0):
     pyipopt.set_loglevel(1)
@@ -364,7 +386,7 @@ def solve_unconstr(theta0):
     g_L = np.array([], dtype=float)
     g_U = np.array([], dtype=float)
 
-    nlp = pyipopt.Problem(theta0.size, x_L, x_U, ncon, g_L, g_U, _eval_jac_g.sparsity_indices, 0, eval_f, eval_grad, _eval_g, _eval_jac_g)
+    nlp = pyipopt.Problem(theta0.size, x_L, x_U, ncon, g_L, g_U, _eval_jac_g.sparsity_indices, hess_sparsity_indices, eval_f, eval_grad, _eval_g, _eval_jac_g, eval_hess)
     # thetahat , _, _, _, _, fval = pyipopt.solve(
     #     eval_f,
     #     theta0,
