@@ -48,7 +48,7 @@ df.stationid = df.stationid.astype(int)
 
 # old coding: 2 = midgrade gasoline, 3 = ethanol
 # new coding: 2 = ethanol, 3 = midgrad gasoline
-choice = df.choice.as_matrix()
+choice = df.choice.values
 df.loc[choice==3, 'choice']=2
 df.loc[choice==2, 'choice']=3
 
@@ -109,11 +109,11 @@ df[dow_dummies.columns[1:]] = dow_dummies[dow_dummies.columns[1:]]
 
 #%%
 
-choice  = df['choice'].as_matrix()
-price   = df.loc[:, pricelbls].as_matrix().transpose()
-X       = df.loc[:, Xlbls].as_matrix().transpose()
-Xp      = df.loc[:, Xplbls].as_matrix().transpose()
-groupid = df.loc[:, grouplbls].as_matrix().transpose()
+choice  = df['choice'].values
+price   = df.loc[:, pricelbls].values.transpose()
+X       = df.loc[:, Xlbls].values.transpose()
+Xp      = df.loc[:, Xplbls].values.transpose()
+groupid = df.loc[:, grouplbls].values.transpose()
 
 nX, nXp, nchoice  = len(Xlbls), len(Xplbls), len(pricelbls) + 1
 
@@ -126,7 +126,7 @@ ngroup  = np.unique(groupid).size
 
 nallsigma = (nsigma+1)*ngroup - 1
 
-stationidold = df['stationid'].astype(int).as_matrix()
+stationidold = df['stationid'].astype(int).values
 uniquestationid = np.unique(stationidold)
 nstation = uniquestationid.shape[0]
 
@@ -359,12 +359,12 @@ def cal_marginal_effect(thetahat, TX, X1, X2):
 def cal_marginal_effect_dummies(thetahat, dummyset):
     X1df = df.loc[:, Xlbls].copy()
     for d in dummyset: X1df[d] = 0.0
-    X1 = X1df.as_matrix().astype(np.float64).transpose()
+    X1 = X1df.values.astype(np.float64).transpose()
     mfx = {}
     for d in dummyset:
         X2df = X1df.copy()
         X2df[d] = 1.0
-        X2 = X2df.as_matrix().astype(np.float64).transpose()
+        X2 = X2df.values.astype(np.float64).transpose()
         print('mfx of ' + d)
         mfx[d] = cal_marginal_effect(thetahat, TX, X1, X2)
     return mfx
@@ -378,10 +378,10 @@ def cal_marginal_effect_continuous(thetajat, varset):
         else:
             X1df = df.loc[:, pricelbls].copy()
             tx = Tprice
-        X1 = X1df.as_matrix().astype(np.float64).transpose()
+        X1 = X1df.values.astype(np.float64).transpose()
         X2df = X1df.copy()
         X2df[varname] += val
-        X2 = X2df.as_matrix().astype(np.float64).transpose()
+        X2 = X2df.values.astype(np.float64).transpose()
         mfx[varname] = cal_marginal_effect(thetahat, tx, X1, X2)
         mfx[varname][0] /= val
         mfx[varname][1] /= val
@@ -489,8 +489,8 @@ if 'marginal_effect_set' in spec:
     X1df = df.loc[:, pricelbls].copy()
     X2df = X1df.copy()
     X2df -= 0.01
-    X1 = X1df.as_matrix().astype(np.float64).transpose()
-    X2 = X2df.as_matrix().astype(np.float64).transpose()
+    X1 = X1df.values.astype(np.float64).transpose()
+    X2 = X2df.values.astype(np.float64).transpose()
     ehat, ese = cal_marginal_effect(thetahat, Tprice, X1, X2)
     marginal_effects['rel_lpg_km_adj'] = [ehat/0.01, ese/0.01]
     
