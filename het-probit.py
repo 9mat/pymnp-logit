@@ -8,9 +8,13 @@ import pyipopt
 import scipy
 import json
 import sys
+import torch
 
-specname = sys.argv[1]
-#specname = 'spec2het'
+from torch import DoubleTensor
+from torch.autograd import Variable
+
+#specname = sys.argv[1]
+specname = '../spec/spec2hetfe'
 purpose = 'solve'
 
 subsample = None
@@ -110,10 +114,10 @@ df[dow_dummies.columns[1:]] = dow_dummies[dow_dummies.columns[1:]]
 #%%
 
 choice  = df['choice'].values
-price   = df.loc[:, pricelbls].values.transpose()
-X       = df.loc[:, Xlbls].values.transpose()
-Xp      = df.loc[:, Xplbls].values.transpose()
-groupid = df.loc[:, grouplbls].values.transpose()
+price   = df.loc[:, pricelbls].values.astype(float).transpose()
+X       = df.loc[:, Xlbls].values.astype(float).transpose()
+Xp      = df.loc[:, Xplbls].values.astype(float).transpose()
+groupid = df.loc[:, grouplbls].values.astype(int).transpose()
 
 nX, nXp, nchoice  = len(Xlbls), len(Xplbls), len(pricelbls) + 1
 
@@ -149,89 +153,11 @@ xi_idx[~nuisancexi] = np.arange(nxi)
 #%%
 tril_index_matrix = np.zeros((ngroup, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
 
-tril_index = np.vstack([np.repeat(np.arange(ngroup), nsigma+1), 
-                       np.tile(np.tril_indices(nchoice-1), ngroup)]).tolist()
+tril_index = tuple(np.vstack([np.repeat(np.arange(ngroup), nsigma+1), 
+                              np.tile(np.tril_indices(nchoice-1), ngroup)]))
 
 tril_index_matrix[tril_index] = np.arange(nallsigma+1)
 
-np.random.seed(1234)
-
-floatX = 'float64'
-theta  = T.dvector('theta')
-
-# unpack parameters
-offset = 0
-alpha  = theta[offset: offset + nalpha]
-
-offset += nalpha
-beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
-
-offset += nbeta
-print(nallsigma)
-print(theta[offset:offset+nallsigma])
-sraw = T.concatenate([[1], theta[offset: offset + nallsigma], [0]])
-S = sraw[tril_index_matrix]
-
-Tprice  = theano.shared(price.astype(floatX),  name='price')
-TX      = theano.shared(X.astype(floatX),  name='X')
-TXp     = theano.shared(Xp.astype(floatX), name='Xp')
-
-if use_fe:
-    offset += nallsigma
-    xiraw = T.concatenate([theta[offset:offset+nxi], [-10000.]])
-    xi = xiraw[xi_idx]
-    V = T.dot(alpha,TXp)*Tprice + T.dot(beta,TX) + xi[:,stationid]
-else:
-    V = T.dot(alpha,TXp)*Tprice + T.dot(beta,TX)
-
-Vfull   = T.concatenate([T.zeros((1, nobs)), V], axis = 0)
-Vchoice = Vfull[(choice-1,np.arange(nobs))]
-Vnorm   = (Vfull - Vchoice)
-
-nonchoicedummy = np.ones((nobs, nchoice), dtype = bool)
-nonchoicedummy[(range(nobs), choice-1)] = False
-iii = np.arange(nobs*nchoice).reshape(nonchoicedummy.shape)
-nonchoiceidx = iii[nonchoicedummy].reshape((nobs, nchoice-1))
-
-Vnonchoice = Vnorm.transpose().flatten()[nonchoiceidx].transpose()  
-
-
-#%%
-
-M = np.stack([[[1,0],[0,1]], [[-1,0],[-1,1]], [[0,-1],[1,-1]]])
-MS = T.dot(M, S).dimshuffle((0,2,1,3)).reshape((ngroup*nchoice, nchoice-1, nchoice-1))
-Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1))).reshape((nchoice, ngroup, nchoice-1, nchoice-1))
-
-#%%
-
-c00 = T.sqrt(Sigma[:,:,0,0])
-c10 = Sigma[:,:,1,0]/c00
-c11 = T.sqrt(Sigma[:,:,1,1] - c10**2)
-
-iii = (choice-1, groupid)
-
-normcdf = lambda x: 0.5 + 0.5*T.erf(x/np.sqrt(2))
-norminv = lambda p: np.sqrt(2)*T.erfinv(2*p-1)
-    
-ndraws = 10
-#draws = np.random.random((ndraws,nobs))
-
-draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
-
-prob0 = normcdf(-Vnonchoice[0,:]/c00[iii])
-draws1 = norminv(draws*prob0)
-prob1 = normcdf(-(Vnonchoice[1,:] + c10[iii]*draws1)/c11[iii])
-
-nlogl_i = -T.log(prob0) - T.log(prob1.sum(axis=0)/ndraws)
-nlogl = nlogl_i.sum()
-
-obj = nlogl
-eval_f = theano.function([theta], outputs = obj)
-grad = theano.function([theta], outputs = T.grad(obj, [theta]))
-hess = theano.function([theta], outputs = theano.gradient.hessian(obj, [theta]))
-
-eval_grad = lambda t: np.squeeze(grad(t))
-eval_hess = lambda t: np.squeeze(hess(t))
 
 
 #%%
@@ -254,7 +180,105 @@ theta0 = np.zeros((nalpha + nbeta,))
 theta0 = np.hstack([theta0, S0])
 if use_fe:
     theta0 = np.hstack([theta0, np.zeros((nxi,))])
+
 #%%
+
+Const = lambda x: DoubleTensor([x])
+
+
+np.random.seed(1234)
+
+# floatX = 'float64'
+# theta  = T.dvector('theta')
+theta = Variable(DoubleTensor(theta0), requires_grad=True)
+
+# unpack parameters
+offset = 0
+alpha  = theta[offset: offset + nalpha].reshape(1, nalpha)
+
+offset += nalpha
+beta   = theta[offset: offset + nbeta].reshape(nchoice-1, nX)
+
+offset += nbeta
+sraw = theta[offset:offset + nallsigma]
+
+offset += nallsigma
+xiraw = theta[offset:offset+nxi]
+
+# sraw = T.concatenate([[1], theta[offset: offset + nallsigma], [0]])
+# S = sraw[tril_index_matrix]
+sraw_padded = torch.cat((Const(1), sraw, Const(0)))
+S = sraw_padded[torch.tensor(tril_index_matrix)]
+
+# Tprice  = theano.shared(price.astype(floatX),  name='price')
+# TX      = theano.shared(X.astype(floatX),  name='X')
+# TXp     = theano.shared(Xp.astype(floatX), name='Xp')
+
+Tprice = DoubleTensor(price)
+TX     = DoubleTensor(X)
+TXp    = DoubleTensor(Xp) 
+
+if use_fe:
+    offset += nallsigma
+    xiraw_padded = torch.cat((xiraw, Const(-10000.)))
+    xi = xiraw_padded[torch.tensor(xi_idx)]
+    V = alpha.mm(TXp)*Tprice + beta.mm(TX) + xi[:,stationid]
+else:
+    V = alpha.mm(TXp)*Tprice + beta.mm(TX)
+
+Vbase   = torch.zeros(1, nobs, dtype=float)
+Vfull   = torch.cat((Vbase, V))
+Vchoice = Vfull[choice-1,np.arange(nobs)]
+Vnorm   = Vfull - Vchoice
+
+nonchoicedummy = np.ones((nobs, nchoice), dtype = bool)
+nonchoicedummy[(range(nobs), choice-1)] = False
+iii = np.arange(nobs*nchoice).reshape(nonchoicedummy.shape)
+nonchoiceidx = iii[nonchoicedummy].reshape((nobs, nchoice-1))
+
+Vnonchoice = Vnorm.t().flatten()[torch.tensor(nonchoiceidx)].t()  
+
+
+#%%
+
+M = DoubleTensor([[[1,0],[0,1]], [[-1,0],[-1,1]], [[0,-1],[1,-1]]])
+MS = torch.einsum('jkl,ilh->jikh', M, S)
+Sigma = torch.einsum('jikh,jith->jikt',MS,MS)
+#MS = T.dot(M, S).dimshuffle((0,2,1,3)).reshape((ngroup*nchoice, nchoice-1, nchoice-1))
+#Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1))).reshape((nchoice, ngroup, nchoice-1, nchoice-1))
+
+#%%
+
+c00 = torch.sqrt(Sigma[:,:,0,0])
+c10 = Sigma[:,:,1,0]/c00
+c11 = torch.sqrt(Sigma[:,:,1,1] - c10**2)
+
+iii = (choice-1, groupid)
+
+normcdf = lambda x: 0.5 + 0.5*torch.erf(x/np.sqrt(2))
+norminv = lambda p: np.sqrt(2)*torch.erfinv(2*p-1)
+    
+ndraws = 10
+#draws = np.random.random((ndraws,nobs))
+
+draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
+
+prob0 = normcdf(-Vnonchoice[0,:]/c00[iii])
+draws1 = norminv(draws*prob0)
+prob1 = normcdf(-(Vnonchoice[1,:] + c10[iii]*draws1)/c11[iii])
+
+nlogl_i = -T.log(prob0) - T.log(prob1.sum(axis=0)/ndraws)
+nlogl = nlogl_i.sum()
+
+obj = nlogl
+eval_f = theano.function([theta], outputs = obj)
+grad = theano.function([theta], outputs = T.grad(obj, [theta]))
+hess = theano.function([theta], outputs = theano.gradient.hessian(obj, [theta]))
+
+eval_grad = lambda t: np.squeeze(grad(t))
+eval_hess = lambda t: np.squeeze(hess(t))
+
+
 
 Vallbase        = T.dot(M, V)
 p0allbase       = T.maximum(normcdf(-Vallbase[:,0,:]/c00[:,groupid]), 1e-8)
