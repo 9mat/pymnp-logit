@@ -4,39 +4,30 @@ import theano
 import theano.tensor as T
 import theano.gradient
 import theano.tensor.slinalg
-import pyipopt
 import scipy
 import json
 import sys
+from knitro.numpy import *
 
-specname = sys.argv[1]
-#specname = 'spec2het'
+#specname = sys.argv[1]
+specname = '../../spec/spec2hetfe'
 purpose = 'solve'
 
 subsample = None
 
 with open(specname + '.json', 'r') as f:
     spec = json.load(f)
-    inputfile = spec['inputfile']
-    lbls = spec['label']
-    Xlbls = lbls['X']
-    Xplbls = lbls['Xp']
-    pricelbls = lbls['price']
-    grouplbls = lbls['group']
     
-    use_fe = False
-    use_share_moments = False
-    if 'settings' in spec:
-        settings = spec['settings']
-        if 'use_fe' in settings:
-            use_fe = settings['use_fe']
-        if 'use_share_moments' in settings:
-            use_share_moments = settings['use_share_moments']
+inputfile = spec['inputfile']
+Xlbls = spec['X']
+Xplbls = spec['Xp']
+pricelbls = spec['price']
+grouplbls = spec['group']
 
-    if "subsample" in spec:
-        subsample = spec["subsample"]
-    
-print(use_fe)
+use_fe = spec['use_fe'] if 'use_fe' in spec else False
+use_share_moments =spec['use_share_moment'] if 'use_share_moment' in spec else False
+subsample = spec['subsample'] if 'subsample' in spec else None
+
 with open(inputfile, 'rb') as fi:
     df = pd.read_stata(fi)
 
@@ -167,8 +158,6 @@ offset += nalpha
 beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
 
 offset += nbeta
-print(nallsigma)
-print(theta[offset:offset+nallsigma])
 sraw = T.concatenate([[1], theta[offset: offset + nallsigma], [0]])
 S = sraw[tril_index_matrix]
 
@@ -327,15 +316,70 @@ def findiff(f, x):
         
     return np.stack(df)
     
-def solve_unconstr(theta0):
-    pyipopt.set_loglevel(1)
-    thetahat , _, _, _, _, fval = pyipopt.fmin_unconstrained(
-        eval_f,
-        theta0,
-        fprime=eval_grad,
-        fhess=eval_hess,
-    )
+#*------------------------------------------------------------------*
+#*     FUNCTION callbackEvalF                                       *
+#*------------------------------------------------------------------*
+# The signature of this function matches KN_eval_callback in knitro.py.
+# Only "obj" is set in the KN_eval_result structure.
+def callbackEvalF (kc, cb, evalRequest, evalResult, userParams):
+    if evalRequest.type != KN_RC_EVALFC:
+        print ("*** callbackEvalF incorrectly called with eval type %d" % evalRequest.type)
+        return -1
     
+    evalResult.obj = eval_f(evalRequest.x)
+    return 0
+
+#*------------------------------------------------------------------*
+#*     FUNCTION callbackEvalG                                       *
+#*------------------------------------------------------------------*
+# The signature of this function matches KN_eval_callback in knitro.py.
+# Only "objGrad" is set in the KN_eval_result structure.
+def callbackEvalG (kc, cb, evalRequest, evalResult, userParams):
+    if evalRequest.type != KN_RC_EVALGA:
+        print ("*** callbackEvalG incorrectly called with eval type %d" % evalRequest.type)
+        return -1
+
+    evalResult.objGrad = eval_grad(evalRequest.x)
+    return 0
+
+#*------------------------------------------------------------------*
+#*     FUNCTION callbackEvalH                                       *
+#*------------------------------------------------------------------*
+# The signature of this function matches KN_eval_callback in knitro.py.
+# Only "hess" and "hessVec" are set in the KN_eval_result structure.
+def callbackEvalH (kc, cb, evalRequest, evalResult, userParams):
+    if evalRequest.type != KN_RC_EVALH and evalRequest.type != KN_RC_EVALH_NO_F:
+        print ("*** callbackEvalH incorrectly called with eval type %d" % evalRequest.type)
+        return -1
+    
+    h = eval_hess(evalRequest.x)
+
+    offset = 0
+    n = len(evalRequest.x)
+    
+    for row in range(n):
+        evalResult.hess[offset:offset+(n-row)] = h[row, row:]*evalRequest.sigma
+        offset += n-row
+
+    return 0
+
+
+def solve_unconstr_ktr(theta0):        
+    variables = Variables(len(theta0), xInitVals = theta0)
+    callbacks = Callback(evalObj=True,
+                         funcCallback=callbackEvalF,
+                         objGradIndexVars=KN_DENSE,
+                         gradCallback=callbackEvalG,
+                         hessIndexVars1=KN_DENSE_ROWMAJOR,
+                         hessCallback=callbackEvalH,
+                         hessianNoFAllow=True)
+    
+    options = {'outlev': KN_OUTLEV_ALL}
+
+    thetahat = optimize(variables=variables,
+                        callbacks=callbacks,
+                        options=options)
+        
     return thetahat
 
 #%%
