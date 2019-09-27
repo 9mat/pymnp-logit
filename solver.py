@@ -47,28 +47,42 @@ try:
             return 0
 
         
-        variables = Variables(len(theta0), xInitVals = theta0)
-
-        if eval_hess is None:
-            callbacks = Callback(evalObj=True,
-                                 funcCallback=callbackEvalF,
-                                 objGradIndexVars=KN_DENSE,
-                                 gradCallback=callbackEvalG)
-        else:
-            callbacks = Callback(evalObj=True,
-                                 funcCallback=callbackEvalF,
-                                 objGradIndexVars=KN_DENSE,
-                                 gradCallback=callbackEvalG,
-                                 hessIndexVars1=KN_DENSE_ROWMAJOR,
-                                 hessCallback=callbackEvalH,
-                                 hessianNoFAllow=True)
-        
-        options = {'outlev': KN_OUTLEV_ALL}
-        solution = optimize(variables=variables,
-                            callbacks=callbacks,
-                            options=options)
+#        variables = Variables(len(theta0), xInitVals = theta0)
+#
+#        if eval_hess is None:
+#            callbacks = Callback(evalObj=True,
+#                                 funcCallback=callbackEvalF,
+#                                 objGradIndexVars=KN_DENSE,
+#                                 gradCallback=callbackEvalG)
+#        else:
+#            callbacks = Callback(evalObj=True,
+#                                 funcCallback=callbackEvalF,
+#                                 objGradIndexVars=KN_DENSE,
+#                                 gradCallback=callbackEvalG,
+#                                 hessIndexVars1=KN_DENSE_ROWMAJOR,
+#                                 hessCallback=callbackEvalH,
+#                                 hessianNoFAllow=True)
+#        
+#        options = {'outlev': KN_OUTLEV_ALL}
+#        solution = optimize(variables=variables,
+#                            callbacks=callbacks,
+#                            options=options)
             
-        return solution.x
+        try:
+            kc = KN_new ()
+        except:
+            print ("Failed to find a valid license.")
+            quit ()
+        
+        KN_add_vars (kc, len(theta0))
+        KN_set_var_primal_init_values (kc, xInitVals = theta0)        
+        cb = KN_add_eval_callback (kc, evalObj = True, funcCallback = callbackEvalF)        
+        KN_set_cb_grad (kc, cb, objGradIndexVars = KN_DENSE, gradCallback = callbackEvalG)
+        KN_set_cb_hess (kc, cb, hessIndexVars1 = KN_DENSE_ROWMAJOR, hessCallback = callbackEvalH)
+        nStatus = KN_solve (kc)        
+        nStatus, objSol, x, lambda_ = KN_get_solution (kc)
+            
+        return x
 
 except ImportError:
     from pyipopt import set_loglevel, fmin_unconstrained
