@@ -41,7 +41,7 @@ for x in ['treattype', 'choice', 'consumerid', 'stationid']:
 
 # old coding: 2 = midgrade gasoline, 3 = ethanol
 # new coding: 2 = ethanol, 3 = midgrad gasoline
-choice = df.choice.as_matrix()
+choice = df.choice.values
 df.loc[choice==3, 'choice']=2
 df.loc[choice==2, 'choice']=3
 
@@ -102,11 +102,11 @@ df[dow_dummies.columns[1:]] = dow_dummies[dow_dummies.columns[1:]]
 
 #%%
 
-choice  = df['choice'].as_matrix()
-price   = df.loc[:, pricelbls].as_matrix().transpose()
-X       = df.loc[:, Xlbls].as_matrix().transpose()
-Xp      = df.loc[:, Xplbls].as_matrix().transpose()
-groupid = df.loc[:, grouplbls].as_matrix().transpose()
+choice  = df['choice'].values
+price   = df.loc[:, pricelbls].values.transpose()
+X       = df.loc[:, Xlbls].values.transpose()
+Xp      = df.loc[:, Xplbls].values.transpose()
+groupid = df.loc[:, grouplbls].values.transpose()
 
 nX, nXp, nchoice  = len(Xlbls), len(Xplbls), len(pricelbls) + 1
 
@@ -119,7 +119,7 @@ ngroup  = np.unique(groupid).size
 
 nallsigma = (nsigma+1)*ngroup - 1
 
-stationidold = df['stationid'].astype(int).as_matrix()
+stationidold = df['stationid'].astype(int).values
 uniquestationid = np.unique(stationidold)
 nstation = uniquestationid.shape[0]
 
@@ -142,8 +142,8 @@ xi_idx[~nuisancexi] = np.arange(nxi)
 #%%
 tril_index_matrix = np.zeros((ngroup, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
 
-tril_index = np.vstack([np.repeat(np.arange(ngroup), nsigma+1), 
-                       np.tile(np.tril_indices(nchoice-1), ngroup)]).tolist()
+tril_index = (np.repeat(np.arange(ngroup), nsigma+1), 
+              np.tile(np.tril_indices(nchoice-1), ngroup))
 
 tril_index_matrix[tril_index] = np.arange(nallsigma+1)
 
@@ -319,7 +319,6 @@ def findiff(f, x):
         
     return np.stack(df)
 
-thetahat = solve_unconstr(theta0, eval_f, eval_grad, eval_hess)
 
 #%%
 eval_mean_pallbase = theano.function([theta], pallbase.mean(axis=1))
@@ -343,27 +342,28 @@ def cal_marginal_effect(thetahat, TX, X1, X2):
 def cal_marginal_effect_dummies(thetahat, dummyset):
     X1df = df.loc[:, Xlbls].copy()
     for d in dummyset: X1df[d] = 0.0
-    X1 = X1df.as_matrix().astype(np.float64).transpose()
+    X1 = X1df.values.astype(np.float64).transpose()
     mfx = {}
     for d in dummyset:
         X2df = X1df.copy()
         X2df[d] = 1.0
-        X2 = X2df.as_matrix().astype(np.float64).transpose()
+        X2 = X2df.values.astype(np.float64).transpose()
         print('mfx of ' + d)
         mfx[d] = cal_marginal_effect(thetahat, TX, X1, X2)
     return mfx
     
-def cal_marginal_effect_continuous(thetajat, varname, value):
+def cal_marginal_effect_continuous(thetajat, varname, val):
+    print('mfx of ' + varname)
     if varname in Xlbls:
         X1df = df.loc[:, Xlbls].copy()
         tx = TX
     else:
         X1df = df.loc[:, pricelbls].copy()
         tx = Tprice
-    X1 = X1df.as_matrix().astype(np.float64).transpose()
+    X1 = X1df.values.astype(np.float64).transpose()
     X2df = X1df.copy()
     X2df[varname] += val
-    X2 = X2df.as_matrix().astype(np.float64).transpose()
+    X2 = X2df.values.astype(np.float64).transpose()
     mfx = cal_marginal_effect(thetahat, tx, X1, X2)
     mfx[0] /= val
     mfx[1] /= val
@@ -373,19 +373,15 @@ def cal_marginal_effect_continuous(thetajat, varname, value):
 
 resultfile = spec['resultfile'] if 'resultfile' in spec else input('Path to result: ')
 
-if purpose != 'mfx':
-    thetahat = solve_unconstr(theta0)
-        
-    if use_fe and use_share_moments:
-        result = solve_constr(thetahat)
-        thetahat2 = result[0]
-    
+if 'solve' in purpose:
+    thetahat = solve_unconstr(theta0, eval_f, eval_grad, eval_hess)
     with open(resultfile, 'w') as outfile:
         json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile, indent=2)
-else:
-    with open(resultfile, 'r') as outfile:
-    	results = json.load(outfile)
-    	thetahat = np.array(results['thetahat'])
+
+with open(resultfile, 'r') as outfile:
+	results = json.load(outfile)
+	
+thetahat = np.array(results['thetahat'])
 
     
 #%%
@@ -432,13 +428,13 @@ else:
 #plt.show()
 
 #%%
-covhat = np.linalg.pinv(eval_hess(thetahat))
-lnprob = T.log(prob0) + T.log(prob1.mean(axis=0))
-#dlnprob = T.jacobian(lnprob, [theta])[0]
 
 jacobian = theano.gradient.jacobian(nlogl_i, theta)
 eval_jab = theano.function([theta], jacobian)
+
+
 Jhat = eval_jab(thetahat)
+covhat = np.linalg.pinv(eval_hess(thetahat))
 
 GG = Jhat.transpose().dot(Jhat)
 GGclustered = np.zeros_like(GG)
@@ -449,32 +445,24 @@ for stid in df.stationid.unique():
 covhatclustered = np.matmul(covhat, np.matmul(GGclustered, covhat))
 
 covhat = covhatclustered
-#%%
-#G = theano.function([theta], dlnprob)(thetahat)
-#covhat = np.linalg.pinv(np.dot(G.transpose(), G))
 sehat = np.sqrt(np.diag(covhat))
 tstat = thetahat/sehat
 
 #%%
-#marginal_effect_set = {
-#    'female': [{'dv_female':0}, 
-#               {'dv_female':1}],
-#    'college': [{'dv_somesecondary':0, 'dv_somecollege':0},
-#                {'dv_somesecondary':0, 'dv_somecollege':1}]}
 
 marginal_effects = {}
 
-for mfx in filter(lambda k: k.startswith("mfx_dv_", spec):
+for mfx in filter(lambda k: k.startswith("mfx_dv_"), spec):
     marginal_effects.update(cal_marginal_effect_dummies(thetahat, spec[mfx]))
 
-for mfx in filter(lambda k: k.startswith("mfx_ct_", spec):
-    marginal_effects.update(cal_marginal_effect_dummies(thetahat, mfx[7:], spec[mfx]))
+for mfx in filter(lambda k: k.startswith("mfx_ct_"), spec):
+    marginal_effects.update(cal_marginal_effect_continuous(thetahat, mfx[7:], spec[mfx]))
 
 X1df = df.loc[:, pricelbls].copy()
 X2df = X1df.copy()
 X2df -= 0.01
-X1 = X1df.as_matrix().astype(np.float64).transpose()
-X2 = X2df.as_matrix().astype(np.float64).transpose()
+X1 = X1df.values.astype(np.float64).transpose()
+X2 = X2df.values.astype(np.float64).transpose()
 ehat, ese = cal_marginal_effect(thetahat, Tprice, X1, X2)
 marginal_effects['rel_lpg_km_adj'] = [ehat/0.01, ese/0.01]
     
@@ -544,8 +532,8 @@ def print_result_row(coeff, se, t, label):
     
 def print_result_group(grouplabel, coeffs, ses, ts, labels):
     print(grouplabel)
-    for i in range(len(coeffs)):
-        print_result_row(coeffs[i], ses[i], ts[i], labels[i])
+    for coef, se, t, lbl in zip(coeffs, ses, ts, labels):
+        print_result_row(coef, se, t, lbl)
     print(divider2)
     
 for j in range(nchoice-1):
