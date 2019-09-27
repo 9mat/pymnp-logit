@@ -4,47 +4,40 @@ import theano
 import theano.tensor as T
 import theano.gradient
 import theano.tensor.slinalg
-import pyipopt
 import scipy
 import json
 import sys
+from solver import solve_unconstr
 
-specname = sys.argv[1]
-#specname = 'spec2het'
+#%%
+#specname = sys.argv[1]
+
+#specname = sys.argv[1] if len(sys.arg) > 1 else input("Path to spec: ")
+specname = '../../spec/spec2hetfe'
+
 purpose = 'solve'
-
 subsample = None
 
 with open(specname + '.json', 'r') as f:
     spec = json.load(f)
-    inputfile = spec['inputfile']
-    lbls = spec['label']
-    Xlbls = lbls['X']
-    Xplbls = lbls['Xp']
-    pricelbls = lbls['price']
-    grouplbls = lbls['group']
     
-    use_fe = False
-    use_share_moments = False
-    if 'settings' in spec:
-        settings = spec['settings']
-        if 'use_fe' in settings:
-            use_fe = settings['use_fe']
-        if 'use_share_moments' in settings:
-            use_share_moments = settings['use_share_moments']
+inputfile = spec['inputfile'] if 'inputfile' in spec else input("Path to input: ")
+    
+Xlbls = spec['X']
+Xplbls = spec['Xp']
+pricelbls = spec['price']
+grouplbls = spec['group']
 
-    if "subsample" in spec:
-        subsample = spec["subsample"]
-    
-print(use_fe)
+use_fe = spec['use_fe'] if 'use_fe' in spec else False
+use_share_moments = spec['use_share_moment'] if 'use_share_moment' in spec else False
+subsample = spec['subsample'] if 'subsample' in spec else None
+
 with open(inputfile, 'rb') as fi:
     df = pd.read_stata(fi)
 
 # convert indexing variables to int
-df.treattype = df.treattype.astype(int)
-df.choice = df.choice.astype(int)
-df.consumerid = df.consumerid.astype(int)
-df.stationid = df.stationid.astype(int)
+for x in ['treattype', 'choice', 'consumerid', 'stationid']:
+    df[x] = df[x].astype(int)
 
 # old coding: 2 = midgrade gasoline, 3 = ethanol
 # new coding: 2 = ethanol, 3 = midgrad gasoline
@@ -167,8 +160,6 @@ offset += nalpha
 beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
 
 offset += nbeta
-print(nallsigma)
-print(theta[offset:offset+nallsigma])
 sraw = T.concatenate([[1], theta[offset: offset + nallsigma], [0]])
 S = sraw[tril_index_matrix]
 
@@ -254,6 +245,7 @@ theta0 = np.zeros((nalpha + nbeta,))
 theta0 = np.hstack([theta0, S0])
 if use_fe:
     theta0 = np.hstack([theta0, np.zeros((nxi,))])
+    
 #%%
 
 Vallbase        = T.dot(M, V)
@@ -264,52 +256,52 @@ draws1allbase   = norminv(drawsallbase*p0allbase)
 p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
 
 pallbase = p0allbase*p1allbase
-
-if use_fe and use_share_moments:    
-    pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
-    pstationtrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[~nuisancexi.flatten()]
-                   
-    obj_multiplier = T.dscalar('obj_multiplier')
-    lagrange_multiplier = T.dvector('lagrange_multiplier')
-    lagrange = obj_multiplier*obj + (lagrange_multiplier*pstation).sum()
-    
-    constr = theano.function([theta], pstation)
-    jab = theano.function([theta], T.jacobian(pstation, [theta]))
-    hess_constr = theano.function([theta, lagrange_multiplier, obj_multiplier], 
-                                  outputs=theano.gradient.hessian(lagrange, [theta]))
-    
-    ntheta1 = nalpha + nbeta + nallsigma
-    nxifull = (nchoice-1)*nstation
-    mask00 = np.ones((ntheta1, ntheta1), dtype = bool)
-    mask01 = np.ones((ntheta1, nxi), dtype = bool)
-    mask10 = np.ones((nxi, ntheta1), dtype = bool)
-    mask11 = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))[~nuisancexi.flatten(),:][:,~nuisancexi.flatten()]
-    
-    maskj = np.hstack((mask10, mask11))
-    maskh = np.hstack((np.vstack((mask00, mask10)), np.vstack((mask01, mask11))))
-    
-    def solve_constr(theta0, use_hess = False):
-        pyipopt.set_loglevel(1)    
-        n = theta0.size    
-        x_L = np.array([pyipopt.NLP_LOWER_BOUND_INF]*n, dtype=float)
-        x_U = np.array([pyipopt.NLP_UPPER_BOUND_INF]*n, dtype=float)        
-        ncon = pstationtrue.size
-        g_L = g_U = pstationtrue    
-        nnzj = maskj.sum()
-        nnzh = maskh.sum()    
-        idxrj, idxcj = np.mgrid[:ncon, :n]
-        idxrh, idxch = np.mgrid[:n, :n]    
-        eval_c = lambda t: constr(t)
-        eval_j = lambda t, f: (idxrj[maskj], idxcj[maskj]) if f else np.squeeze(jab(t))[maskj]
-        if use_hess:
-            eval_h = lambda t, l, o, f: (idxrh[maskh], idxch[maskh]) if f else np.squeeze(hess_constr(t,l,o))[maskh]
-            nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j, eval_h)
-        else:
-            nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j)
-        results = nlp.solve(theta0)
-        nlp.close()
-        return results
-    
+#
+#if use_fe and use_share_moments:    
+#    pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
+#    pstationtrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[~nuisancexi.flatten()]
+#                   
+#    obj_multiplier = T.dscalar('obj_multiplier')
+#    lagrange_multiplier = T.dvector('lagrange_multiplier')
+#    lagrange = obj_multiplier*obj + (lagrange_multiplier*pstation).sum()
+#    
+#    constr = theano.function([theta], pstation)
+#    jab = theano.function([theta], T.jacobian(pstation, [theta]))
+#    hess_constr = theano.function([theta, lagrange_multiplier, obj_multiplier], 
+#                                  outputs=theano.gradient.hessian(lagrange, [theta]))
+#    
+#    ntheta1 = nalpha + nbeta + nallsigma
+#    nxifull = (nchoice-1)*nstation
+#    mask00 = np.ones((ntheta1, ntheta1), dtype = bool)
+#    mask01 = np.ones((ntheta1, nxi), dtype = bool)
+#    mask10 = np.ones((nxi, ntheta1), dtype = bool)
+#    mask11 = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))[~nuisancexi.flatten(),:][:,~nuisancexi.flatten()]
+#    
+#    maskj = np.hstack((mask10, mask11))
+#    maskh = np.hstack((np.vstack((mask00, mask10)), np.vstack((mask01, mask11))))
+#    
+#    def solve_constr(theta0, use_hess = False):
+#        pyipopt.set_loglevel(1)    
+#        n = theta0.size    
+#        x_L = np.array([pyipopt.NLP_LOWER_BOUND_INF]*n, dtype=float)
+#        x_U = np.array([pyipopt.NLP_UPPER_BOUND_INF]*n, dtype=float)        
+#        ncon = pstationtrue.size
+#        g_L = g_U = pstationtrue    
+#        nnzj = maskj.sum()
+#        nnzh = maskh.sum()    
+#        idxrj, idxcj = np.mgrid[:ncon, :n]
+#        idxrh, idxch = np.mgrid[:n, :n]    
+#        eval_c = lambda t: constr(t)
+#        eval_j = lambda t, f: (idxrj[maskj], idxcj[maskj]) if f else np.squeeze(jab(t))[maskj]
+#        if use_hess:
+#            eval_h = lambda t, l, o, f: (idxrh[maskh], idxch[maskh]) if f else np.squeeze(hess_constr(t,l,o))[maskh]
+#            nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j, eval_h)
+#        else:
+#            nlp = pyipopt.create(theta0.size, x_L, x_U, ncon, g_L, g_U, nnzj, nnzh, eval_f, eval_grad, eval_c, eval_j)
+#        results = nlp.solve(theta0)
+#        nlp.close()
+#        return results
+#    
 #%%
 def findiff(f, x):
     dx = 1e-5*abs(x)
@@ -326,21 +318,13 @@ def findiff(f, x):
         df.append((f(x2)-f(x1)).flatten()/(2*dx[i]))
         
     return np.stack(df)
-    
-def solve_unconstr(theta0):
-    pyipopt.set_loglevel(1)
-    thetahat , _, _, _, _, fval = pyipopt.fmin_unconstrained(
-        eval_f,
-        theta0,
-        fprime=eval_grad,
-        fhess=eval_hess,
-    )
-    
-    return thetahat
+
+thetahat = solve_unconstr(theta0, eval_f, eval_grad, eval_hess)
 
 #%%
 eval_mean_pallbase = theano.function([theta], pallbase.mean(axis=1))
 eval_dmean_pallbase = theano.function([theta], T.jacobian(pallbase.mean(axis=1),[theta])[0])
+
 def cal_marginal_effect(thetahat, TX, X1, X2):
     X0 = TX.get_value()
     TX.set_value(X1)
@@ -369,25 +353,26 @@ def cal_marginal_effect_dummies(thetahat, dummyset):
         mfx[d] = cal_marginal_effect(thetahat, TX, X1, X2)
     return mfx
     
-def cal_marginal_effect_continuous(thetajat, varset):
-    mfx = {}
-    for varname, val in varset.items():
-        if varname in Xlbls:
-            X1df = df.loc[:, Xlbls].copy()
-            tx = TX
-        else:
-            X1df = df.loc[:, pricelbls].copy()
-            tx = Tprice
-        X1 = X1df.as_matrix().astype(np.float64).transpose()
-        X2df = X1df.copy()
-        X2df[varname] += val
-        X2 = X2df.as_matrix().astype(np.float64).transpose()
-        mfx[varname] = cal_marginal_effect(thetahat, tx, X1, X2)
-        mfx[varname][0] /= val
-        mfx[varname][1] /= val
-    return mfx
+def cal_marginal_effect_continuous(thetajat, varname, value):
+    if varname in Xlbls:
+        X1df = df.loc[:, Xlbls].copy()
+        tx = TX
+    else:
+        X1df = df.loc[:, pricelbls].copy()
+        tx = Tprice
+    X1 = X1df.as_matrix().astype(np.float64).transpose()
+    X2df = X1df.copy()
+    X2df[varname] += val
+    X2 = X2df.as_matrix().astype(np.float64).transpose()
+    mfx = cal_marginal_effect(thetahat, tx, X1, X2)
+    mfx[0] /= val
+    mfx[1] /= val
+    return {varname: mfx}
 
 #%%
+
+resultfile = spec['resultfile'] if 'resultfile' in spec else input('Path to result: ')
+
 if purpose != 'mfx':
     thetahat = solve_unconstr(theta0)
         
@@ -395,10 +380,10 @@ if purpose != 'mfx':
         result = solve_constr(thetahat)
         thetahat2 = result[0]
     
-    with open('./results/' + specname + '_result.json', 'w') as outfile:
+    with open(resultfile, 'w') as outfile:
         json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile, indent=2)
 else:
-    with open('./results/' + specname + '_result.json', 'r') as outfile:
+    with open(resultfile, 'r') as outfile:
     	results = json.load(outfile)
     	thetahat = np.array(results['thetahat'])
 
@@ -477,30 +462,31 @@ tstat = thetahat/sehat
 #    'college': [{'dv_somesecondary':0, 'dv_somecollege':0},
 #                {'dv_somesecondary':0, 'dv_somecollege':1}]}
 
-if 'marginal_effect_set' in spec:
-    marginal_effect_set = spec['marginal_effect_set']                
-    marginal_effects = {}
-    for mfxcase in marginal_effect_set:
-        if mfxcase['type'] == 'dv':
-            marginal_effects.update(cal_marginal_effect_dummies(thetahat, mfxcase['vars']))
-        else:
-            marginal_effects.update(cal_marginal_effect_continuous(thetahat, mfxcase['vars']))
-            
-    X1df = df.loc[:, pricelbls].copy()
-    X2df = X1df.copy()
-    X2df -= 0.01
-    X1 = X1df.as_matrix().astype(np.float64).transpose()
-    X2 = X2df.as_matrix().astype(np.float64).transpose()
-    ehat, ese = cal_marginal_effect(thetahat, Tprice, X1, X2)
-    marginal_effects['rel_lpg_km_adj'] = [ehat/0.01, ese/0.01]
+marginal_effects = {}
+
+for mfx in filter(lambda k: k.startswith("mfx_dv_", spec):
+    marginal_effects.update(cal_marginal_effect_dummies(thetahat, spec[mfx]))
+
+for mfx in filter(lambda k: k.startswith("mfx_ct_", spec):
+    marginal_effects.update(cal_marginal_effect_dummies(thetahat, mfx[7:], spec[mfx]))
+
+X1df = df.loc[:, pricelbls].copy()
+X2df = X1df.copy()
+X2df -= 0.01
+X1 = X1df.as_matrix().astype(np.float64).transpose()
+X2 = X2df.as_matrix().astype(np.float64).transpose()
+ehat, ese = cal_marginal_effect(thetahat, Tprice, X1, X2)
+marginal_effects['rel_lpg_km_adj'] = [ehat/0.01, ese/0.01]
     
-    marginal_effects_serialized = {}
-    for k, v in marginal_effects.items():
-        marginal_effects_serialized[k] = [x.tolist() for x in v]
+marginal_effects_serialized = {}
+for k, v in marginal_effects.items():
+    marginal_effects_serialized[k] = [x.tolist() for x in v]
 
-    with open('./results/' + specname + '_mfx.json', 'w') as outfile:
+mfxfile = spec['mfxfile'] if 'mfxfile' in spec else input('Path to mfx (empty to skip saving): ')
+
+if mfxfile:
+    with open(mfxfile, 'w') as outfile:
         json.dump(marginal_effects_serialized, outfile, indent=2)
-
 
 #%%
 #if use_fe and use_share_moments:
