@@ -8,17 +8,17 @@ import scipy
 import json
 import sys
 from solver import solve_unconstr
+from plotnine import *
 
 #%%
-#specname = sys.argv[1]
 
-#specname = sys.argv[1] if len(sys.arg) > 1 else input("Path to spec: ")
-specname = '../../spec/spec2hetfe'
+#specfile = sys.argv[1] if len(sys.arg) > 1 else input("Path to spec: ")
+specfile = 'D:/Dropbox/work/ethanol/spec/spec2het.json'
 
 purpose = 'solve'
 subsample = None
 
-with open(specname + '.json', 'r') as f:
+with open(specfile, 'r') as f:
     spec = json.load(f)
     
 inputfile = spec['inputfile'] if 'inputfile' in spec else input("Path to input: ")
@@ -54,16 +54,21 @@ df = df.loc[df.treattype < 3]
 # df['ntreat1'] = df.groupby(['date', 'stationid']).treat1.transform(sum)
 # df = df[df.ntreat1 > 0]
 
+df['treat1'] = df.treattype == 1
+df['treat2'] = df.treattype == 2
+
 
 df['const'] = 1
 
 # impute missing prices
-df['pgmidgrade_km_adj'].fillna(value=1e9, inplace=True)
-df['pemidgrade_km_adj'].fillna(value=1e9, inplace=True)
+df['pgmidgrade_km_adj'].fillna(value=1e3, inplace=True)
+df['pemidgrade_km_adj'].fillna(value=1e3, inplace=True)
 
 # relative prices
 df['rel_lpgmidgrade_km_adj'] = np.log(df.pgmidgrade_km_adj) - np.log(df.pg_km_adj)
 df['rel_lpe_km_adj'] = np.log(df.pe_km_adj) - np.log(df.pg_km_adj)
+#df['rel_lpgmidgrade_km_adj'] = df.pgmidgrade_km_adj - df.pg_km_adj
+#df['rel_lpe_km_adj'] = df.pe_km_adj - df.pg_km_adj
 
 df['ltank'] = np.log(df.car_tank)
 
@@ -90,7 +95,12 @@ df['dv_usageveh_p0p75'] = 1 - df['dv_usageveh_p75p100']
 df['dv_nocollege'] = 1 - df['dv_somecollege']
 
 df['p_ratio'] = df['pe_lt']/df['pg_lt']
-df['e_favor'] = df['p_ratio'] > 0.705
+df['e_favor'] = df['p_ratio'] < 0.695
+df['g_favor'] = df['p_ratio'] > 0.705
+df['e_favor*treat1'] = df['e_favor']&df['treat1']
+df['e_favor*treat2'] = df['e_favor']&df['treat2']
+df['g_favor*treat1'] = df['g_favor']&df['treat1']
+df['g_favor*treat2'] = df['g_favor']&df['treat2']
 
 if subsample is not None:
     df = df.loc[df[subsample]==1,:]
@@ -142,8 +152,8 @@ xi_idx[~nuisancexi] = np.arange(nxi)
 #%%
 tril_index_matrix = np.zeros((ngroup, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
 
-tril_index = (np.repeat(np.arange(ngroup), nsigma+1), 
-              np.tile(np.tril_indices(nchoice-1), ngroup))
+tril_index = tuple(np.vstack([np.repeat(np.arange(ngroup), nsigma+1), 
+                       np.tile(np.tril_indices(nchoice-1), ngroup)]).tolist())
 
 tril_index_matrix[tril_index] = np.arange(nallsigma+1)
 
@@ -187,9 +197,15 @@ nonchoiceidx = iii[nonchoicedummy].reshape((nobs, nchoice-1))
 Vnonchoice = Vnorm.transpose().flatten()[nonchoiceidx].transpose()  
 
 
-#%%
+#%% Transformation matrix
 
-M = np.stack([[[1,0],[0,1]], [[-1,0],[-1,1]], [[0,-1],[1,-1]]])
+M = np.stack([ [[1,0],
+                [0,1]],
+               [[-1,0],
+                [-1,1]], 
+               [[0,-1],
+                [1,-1]] ])
+    
 MS = T.dot(M, S).dimshuffle((0,2,1,3)).reshape((ngroup*nchoice, nchoice-1, nchoice-1))
 Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1))).reshape((nchoice, ngroup, nchoice-1, nchoice-1))
 
@@ -204,7 +220,7 @@ iii = (choice-1, groupid)
 normcdf = lambda x: 0.5 + 0.5*T.erf(x/np.sqrt(2))
 norminv = lambda p: np.sqrt(2)*T.erfinv(2*p-1)
     
-ndraws = 10
+ndraws = spec['ndraw'] if 'ndraw' in spec else 10
 #draws = np.random.random((ndraws,nobs))
 
 draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
@@ -376,7 +392,7 @@ resultfile = spec['resultfile'] if 'resultfile' in spec else input('Path to resu
 if 'solve' in purpose:
     thetahat = solve_unconstr(theta0, eval_f, eval_grad, eval_hess)
     with open(resultfile, 'w') as outfile:
-        json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile, indent=2)
+        json.dump({'thetahat':thetahat.tolist(), 'specfile': specfile}, outfile, indent=2)
 
 with open(resultfile, 'r') as outfile:
 	results = json.load(outfile)
@@ -557,3 +573,76 @@ for j in range(nchoice-1):
                        effecthat[idx], effectse[idx], effecttstat[idx],
                        ["Treatment " + str(j) for j in range(1,ngroup)])
 
+
+
+#%% Welfare
+    
+Sigmahatfull = theano.function([theta], Sigma)(thetahat)
+group_with_min_sigma_e = np.argmin(Sigmahatfull[0,:,0,0])
+
+cf_data = []
+
+for i in range(1,10):
+    noise_factor = i*1.0/10
+    
+    Sigma_noise_min = noise_factor*Sigmahatfull[0,group_with_min_sigma_e,:]
+    Sigma_randu = (1-noise_factor)*Sigmahatfull[0,group_with_min_sigma_e,:]
+    Sigma_noise_all = Sigmahatfull[0,:,:,:] - Sigma_randu
+    
+    ndraw_cf = spec['ndraw_cf'] if 'ndraw_cf' in spec else 100
+    
+    u_noise = np.random.normal(size=(ndraw_cf, nchoice-1, nobs))
+    u_randu = np.random.normal(size=(ndraw_cf, nchoice-1, nobs))
+    
+    Chol_noise = np.linalg.cholesky(Sigma_noise_all)
+    Chol_randu = np.linalg.cholesky(Sigma_randu)
+    
+    # Eistein sum, i.e. batch matrix multiplication
+    # index: g for group, i&k for choice, i for obs, r for draw
+    noise_cf = np.einsum("gjk,rki->grji", Chol_noise, u_noise)
+    randu_cf = np.einsum("jk,rki->rji", Chol_randu, u_randu)
+        
+    for j in range(70,135,5):
+        price_point = j*1.0/100
+        
+        price_cf = df.loc[:, pricelbls].copy()
+        price_cf.rel_lpe_km_adj = np.log(price_point)
+        
+        Tprice.set_value(price_cf.values.transpose())
+        
+        
+        Vhat = theano.function([theta], V)(thetahat)
+        
+        # Vnoise.shape = (ngroup, ndraw_cf, nchoice, nobs), index: grji
+        Vnoise = Vhat + noise_cf + randu_cf
+        Vnoise = np.pad(Vnoise, pad_width=((0,0),(0,0),(1,0),(0,0)), mode='constant')
+        
+        gg, rr, ii = np.mgrid[0:ngroup, 0:ndraw_cf, 0:nobs]
+        choice_cf = np.argmax(Vnoise, axis=2)
+        
+        Vnonoise = Vhat + randu_cf
+        Vnonoise = np.pad(Vnonoise, pad_width=((0,0),(1,0),(0,0)), mode='constant')
+        choice_nonoise = np.argmax(Vnonoise, axis=1)
+        
+        Vmax_nonoise = np.max(Vnonoise, axis=1).mean(axis=0)
+        
+        V_cf = Vnonoise[(rr, choice_cf, ii)].mean(axis=1)
+        
+        print("*"*15)
+        print("noise factor:", noise_factor)
+        print("Counterfactual utility:", V_cf.mean(axis=1))
+        print("No-noise utility:", Vmax_nonoise.mean())
+    
+        Tprice.set_value(price)
+        cf_data.append([price_point, noise_factor, *V_cf.mean(axis=1), Vmax_nonoise.mean()])
+
+#%%
+df_Vcf = pd.DataFrame(data=cf_data,columns=['price_point', 'noise_factor', 'V_cf0', 'V_cf1', 'V_cf2', 'Vnonoise'])
+df_Vcf['gain1'] = (df_Vcf.V_cf1 - df_Vcf.V_cf0)/(-np.log(1.01)*alphahat)
+df_Vcf['gain2'] = (df_Vcf.V_cf2 - df_Vcf.V_cf0)/(-np.log(1.01)*alphahat)
+df_Vcf['gain_nonoise'] = (df_Vcf.Vnonoise - df_Vcf.V_cf0)/(-np.log(1.01)*alphahat)
+
+#%%
+
+df_Vcf['noise_factor_str'] = df_Vcf.noise_factor.astype(str)
+ggplot(df_Vcf) + aes(x="price_point", y="gain1", color = "noise_factor_str") + geom_point() + geom_line()
