@@ -12,13 +12,13 @@ from solver import solve_unconstr
 #%%
 #specname = sys.argv[1]
 
-#specname = sys.argv[1] if len(sys.arg) > 1 else input("Path to spec: ")
-specname = '../../spec/spec2hetfe'
+specfile = sys.argv[1] if len(sys.argv) > 1 else input("Path to spec: ")
+#specname = '../../spec/spec2hetfe'
 
 purpose = 'solve'
 subsample = None
 
-with open(specname + '.json', 'r') as f:
+with open(specfile, 'r') as f:
     spec = json.load(f)
     
 inputfile = spec['inputfile'] if 'inputfile' in spec else input("Path to input: ")
@@ -142,8 +142,8 @@ xi_idx[~nuisancexi] = np.arange(nxi)
 #%%
 tril_index_matrix = np.zeros((ngroup, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
 
-tril_index = (np.repeat(np.arange(ngroup), nsigma+1), 
-              np.tile(np.tril_indices(nchoice-1), ngroup))
+tril_index = tuple(np.vstack((np.repeat(np.arange(ngroup), nsigma+1), 
+              np.tile(np.tril_indices(nchoice-1), ngroup))).tolist())
 
 tril_index_matrix[tril_index] = np.arange(nallsigma+1)
 
@@ -376,7 +376,7 @@ resultfile = spec['resultfile'] if 'resultfile' in spec else input('Path to resu
 if 'solve' in purpose:
     thetahat = solve_unconstr(theta0, eval_f, eval_grad, eval_hess)
     with open(resultfile, 'w') as outfile:
-        json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile, indent=2)
+        json.dump({'thetahat':thetahat.tolist(), 'specfile': specfile}, outfile, indent=2)
 
 with open(resultfile, 'r') as outfile:
 	results = json.load(outfile)
