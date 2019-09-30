@@ -162,11 +162,11 @@ xi_idx[~nuisancexi] = np.arange(nxi)
 # index-zero, and the rest to index from 1 to nallsigma
 
 # initialized with all (nallsigma+1) indices
-tril_index_matrix = np.zeros((ngroup+1, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
+#tril_index_matrix = np.zeros((ngroup+1, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
 
 # list of tuples (g,j,k) -- g group, and j,k index of the lower triangles
-tril_index = tuple(np.vstack((np.repeat(np.arange(ngroup+1), nsigma+1), 
-              np.tile(np.tril_indices(nchoice-1), ngroup+1))).tolist())
+#tril_index = tuple(np.vstack((np.repeat(np.arange(ngroup+1), nsigma+1), 
+#              np.tile(np.tril_indices(nchoice-1), ngroup+1))).tolist())
 
 # set the indices of the lower triangles
 # for 3 groups, 3 choices, this matrix will be
@@ -176,10 +176,11 @@ tril_index = tuple(np.vstack((np.repeat(np.arange(ngroup+1), nsigma+1),
 #  [4, 5]],
 # [[6, 9],
 #  [7, 8]]])
-tril_index_matrix[tril_index] = np.arange(nallsigma+1)
+#tril_index_matrix[tril_index] = np.arange(nallsigma+1)
 
 np.random.seed(1234)
 
+#%%
 # use double precision in all calculation
 floatX = 'float64'
 
@@ -222,7 +223,10 @@ TX      = theano.shared(X.astype(floatX),  name='X')
 TXp     = theano.shared(Xp.astype(floatX), name='Xp')
 
 alpha_i = T.dot(alpha, TXp)    
-V = alpha_i*Tprice + T.dot(beta,TX) + (xi[:,stationid] if use_fe else 0)
+V = alpha_i*Tprice + T.dot(beta,TX) 
+
+if use_fe:
+    V = V + xi[:,stationid]
 
 Vfull   = T.concatenate([T.zeros((1, nobs)), V], axis = 0)
 Vchoice = Vfull[(choice-1,np.arange(nobs))]
@@ -249,49 +253,47 @@ Vnonchoice = Vnorm.transpose().flatten()[nonchoiceidx].transpose()
 #%%
 TXsigma = T.concatenate([alpha_i.reshape((1,-1)), theano.shared(group_dummies.values.transpose())])
 
-var_ze = T.exp(gamma_e.dot(TXsigma))
-var_zm = T.exp(gamma_m[1:].dot(TXsigma) + gamma_m[0])
-var_zem = T.exp(gamma_em[1:].dot(TXsigma) + gamma_em[0])
-cov_zem = (var_zem-1)/(var_zem+1)*T.sqrt(var_ze*var_zm)
+var_z00 = T.exp(gamma_e.dot(TXsigma))
+var_z11 = T.exp(gamma_m[1:].dot(TXsigma) + gamma_m[0])
+cov_z10 = T.tanh(gamma_em[1:].dot(TXsigma) + gamma_em[0])*T.sqrt(var_z00*var_z11)
 
 
 #%%
-s00 = T.sqrt(var_ze)
-s10 = cov_zem/s00+0.5
-s11 = T.sqrt(var_zm - s10**2)
-s01 = T.zeros(((nobs,)))
+s00 = T.sqrt(var_z00)
+s10 = cov_z10/s00
+s11 = T.sqrt(var_z11 - s10**2)
+s01 = T.zeros((nobs,))
 
-S = T.stack([s00, s01, s10, s11]).reshape((2,2,nobs))
+S = T.stack([s00, s01, s10, s11]).transpose().reshape((nobs,2,2))
 
 #%%
 
 M = np.stack([[[1,0],[0,1]], [[-1,0],[-1,1]], [[0,-1],[1,-1]]])
 Mi = M[choice-1, :, :]
 
-MS = T.dot(Mi, S).dimshuffle((0,2,1,3)).reshape((nobs*nchoice, nchoice-1, nchoice-1))
-Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1))).reshape((nchoice, ngroup, nchoice-1, nchoice-1))
+MS = T.batched_dot(Mi, S)
+Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1)))
 
 #%%
 
-c00 = T.sqrt(Sigma[:,:,0,0])
-c10 = Sigma[:,:,1,0]/c00
-c11 = T.sqrt(Sigma[:,:,1,1] - c10**2)
+c00 = T.sqrt(Sigma[:,0,0])
+c10 = Sigma[:,1,0]/c00
+c11 = T.sqrt(Sigma[:,1,1] - c10**2)
 
-iii = (choice-1, groupid)
+#%%
 
 normcdf = lambda x: 0.5 + 0.5*T.erf(x/np.sqrt(2))
 norminv = lambda p: np.sqrt(2)*T.erfinv(2*p-1)
-    
+
 ndraws = 10
 #draws = np.random.random((ndraws,nobs))
 
 draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
 
-prob0 = normcdf(-Vnonchoice[0,:]/c00[iii])
-draws1 = norminv(draws*prob0)
-prob1 = normcdf(-(Vnonchoice[1,:] + c10[iii]*draws1)/c11[iii])
+prob0 = normcdf(-Vnonchoice[0,:]/c00)
+prob1 = normcdf(-(Vnonchoice[1,:] + c10*norminv(draws*prob0))/c11).mean(axis=0)
 
-nlogl_i = -T.log(prob0) - T.log(prob1.sum(axis=0)/ndraws)
+nlogl_i = -T.log(prob0) - T.log(prob1)
 nlogl = nlogl_i.sum()
 
 obj = nlogl
@@ -316,11 +318,8 @@ eval_hess = lambda t: np.squeeze(hess(t))
 #    xi0 = np.zeros((nxi,))
 #    theta0 = np.hstack([theta0, xi0])
 
-S0 = np.tril(np.ones(nchoice-1))*0.5 + np.tril(np.eye(nchoice-1))*0.7
-S0 = np.tile(S0, (ngroup,1,1))[tril_index][1:]
-
 #%%
-theta0 = np.zeros((nalpha + nbeta + ngamma_e + ngamma_m + ngamma_em,))
+theta0 = np.zeros((nalpha + nbeta + ngamma_e + ngamma_m + ngamma_em + nxi,))
     
 #%%
 
