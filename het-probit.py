@@ -84,6 +84,7 @@ df['dv_carclass_subcompact'] = df.car_class == "Subcompact"
 
 df['car_age'] = 2012 - df.car_model_year
 df['car_lprice'] = np.log(df.car_price_adj)
+df['car_lprice_normalized'] = df.car_lprice - df.car_lprice.mean()
 
 df['dv_carpriceadj_p0p75'] = 1 - df['dv_carpriceadj_p75p100']
 df['dv_usageveh_p0p75'] = 1 - df['dv_usageveh_p75p100']
@@ -141,13 +142,15 @@ nobsstation = np.array([(stationid==sid).sum() for sid in range(nstation)])
 
 
 #%% nuisance xi
-sumchoice_station = np.array([dv_choice[1:, stationid == i].sum(axis = 1) for i in range(nstation)]).transpose()
-nuisancexi = sumchoice_station == 0
-nxi = (1-nuisancexi).sum()
-
-xi_idx = np.zeros(nuisancexi.shape, dtype = int) + nxi
-xi_idx[~nuisancexi] = np.arange(nxi)
-
+if use_fe:
+    sumchoice_station = np.array([dv_choice[1:, stationid == i].sum(axis = 1) for i in range(nstation)]).transpose()
+    nuisancexi = sumchoice_station == 0
+    nxi = (1-nuisancexi).sum()
+    
+    xi_idx = np.zeros(nuisancexi.shape, dtype = int) + nxi
+    xi_idx[~nuisancexi] = np.arange(nxi)
+else:
+    nxi = 0
 #%%
 
 # indices to help pick out the elements in the S matrix to be estimated
@@ -251,7 +254,7 @@ Vnonchoice = Vnorm.transpose().flatten()[nonchoiceidx].transpose()
 
 
 #%%
-TXsigma = T.concatenate([alpha_i.reshape((1,-1)), theano.shared(group_dummies.values.transpose())])
+TXsigma = T.concatenate([alpha_i.reshape((1,-1)) - alpha_i.mean(), theano.shared(group_dummies.values.transpose())])
 
 var_z00 = T.exp(gamma_e.dot(TXsigma))
 var_z11 = T.exp(gamma_m[1:].dot(TXsigma) + gamma_m[0])
@@ -324,11 +327,11 @@ theta0 = np.zeros((nalpha + nbeta + ngamma_e + ngamma_m + ngamma_em + nxi,))
 #%%
 
 Vallbase        = T.dot(M, V)
-p0allbase       = T.maximum(normcdf(-Vallbase[:,0,:]/c00[:,groupid]), 1e-8)
+p0allbase       = T.maximum(normcdf(-Vallbase[:,0,:]/c00), 1e-8)
 #drawsallbase    = np.random.random((ndraws,nchoice,nobs))
 drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws
 draws1allbase   = norminv(drawsallbase*p0allbase)
-p1allbase    = normcdf(-(Vallbase[:,1,:] + c10[:,groupid]*draws1allbase)/c11[:,groupid]).mean(axis=0)
+p1allbase    = normcdf(-(Vallbase[:,1,:] + c10*draws1allbase)/c11).mean(axis=0)
 
 pallbase = p0allbase*p1allbase
 #
@@ -574,19 +577,23 @@ def get_stat(f, thetahat):
 
 alphahat, alphase, alphatstat = get_stat(alpha, thetahat)
 betahat, betase, betatstat = get_stat(beta.flatten(), thetahat)
+gamma_ehat, gamma_ese, gamma_et = get_stat(gamma_e, thetahat)
+gamma_mhat, gamma_mse, gamma_mt = get_stat(gamma_m, thetahat)
+gamma_emhat, gamma_emse, gamma_emt = get_stat(gamma_em, thetahat)
 
-i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int) # base alternative = 0
-i2 = np.tile(np.arange(ngroup, dtype=int), nchoice-1)[1:] # groupid
-i3 = np.repeat(np.arange(nchoice-1, dtype=int), ngroup)[1:] # variance (diagonal element of each choice)
-iii = (i1,i2,i3,i3)
-Sigmamain = Sigma[iii]
-
-mm = np.hstack((-np.ones((2,1)), np.eye(2)))
-mm = scipy.linalg.block_diag(np.eye(2), *([mm]*(ngroup*2//3-1)))
-effect = T.dot(mm, T.log(Sigmamain))
-
-Sigmahat, Sigmase, Sigmatstat = get_stat(Sigmamain, thetahat)
-effecthat, effectse, effecttstat = get_stat(effect, thetahat)
+#
+#i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int) # base alternative = 0
+#i2 = np.tile(np.arange(ngroup, dtype=int), nchoice-1)[1:] # groupid
+#i3 = np.repeat(np.arange(nchoice-1, dtype=int), ngroup)[1:] # variance (diagonal element of each choice)
+#iii = (i1,i2,i3,i3)
+#Sigmamain = Sigma[iii]
+#
+#mm = np.hstack((-np.ones((2,1)), np.eye(2)))
+#mm = scipy.linalg.block_diag(np.eye(2), *([mm]*(ngroup*2//3-1)))
+#effect = T.dot(mm, T.log(Sigmamain))
+#
+#Sigmahat, Sigmase, Sigmatstat = get_stat(Sigmamain, thetahat)
+#effecthat, effectse, effecttstat = get_stat(effect, thetahat)
 
 choicelbls = ['ethanol', 'midgrade gasoline']
 
@@ -615,20 +622,32 @@ for j in range(nchoice-1):
     idx = range(j*nX, (j+1)*nX)
     print_result_group("utiltiy of " + choicelbls[j],
                        betahat[idx], betase[idx], betatstat[idx], Xlbls)
+#
+#print_result_group("variance of random utility, " + choicelbls[0],
+#                   Sigmahat[:ngroup-1], Sigmase[:ngroup-1], Sigmatstat[:ngroup-1],
+#                   ["Treatment " + str(j) for j in range(1,ngroup)])
+#
+#for j in range(1,nchoice-1):
+#    idx = range(j*ngroup-1, (j+1)*ngroup-1)
+#    print_result_group("variance of random utility, " + choicelbls[j],
+#                       Sigmahat[idx], Sigmase[idx], Sigmatstat[idx],
+#                       ["Treatment " + str(j) for j in range(ngroup)])
+#
+#for j in range(nchoice-1):
+#    idx = range(j*(ngroup*2//3), (j+1)*(ngroup*2//3))
+#    print_result_group("effect on log(variance of random utility, " + choicelbls[j] + ")",
+#                       effecthat[idx], effectse[idx], effecttstat[idx],
+#                       ["Treatment " + str(j) for j in range(1,ngroup)])
+#
 
-print_result_group("variance of random utility, " + choicelbls[0],
-                   Sigmahat[:ngroup-1], Sigmase[:ngroup-1], Sigmatstat[:ngroup-1],
-                   ["Treatment " + str(j) for j in range(1,ngroup)])
+print_result_group("variance of ethanol random utility (log)",
+                   gamma_ehat, gamma_ese, gamma_et,
+                   ["alpha_i"] + group_dummies.columns.tolist())
+    
+print_result_group("variance of midgrade-g random utility (log)",
+                   gamma_mhat, gamma_mse, gamma_mt,
+                   ["const", "alpha_i"] + group_dummies.columns.tolist())
 
-for j in range(1,nchoice-1):
-    idx = range(j*ngroup-1, (j+1)*ngroup-1)
-    print_result_group("variance of random utility, " + choicelbls[j],
-                       Sigmahat[idx], Sigmase[idx], Sigmatstat[idx],
-                       ["Treatment " + str(j) for j in range(ngroup)])
-
-for j in range(nchoice-1):
-    idx = range(j*(ngroup*2//3), (j+1)*(ngroup*2//3))
-    print_result_group("effect on log(variance of random utility, " + choicelbls[j] + ")",
-                       effecthat[idx], effectse[idx], effecttstat[idx],
-                       ["Treatment " + str(j) for j in range(1,ngroup)])
-
+print_result_group("corr of midgrade-g random utility (ctanh)",
+                   gamma_emhat, gamma_emse, gamma_emt,
+                   ["const", "alpha_i"] + group_dummies.columns.tolist())
