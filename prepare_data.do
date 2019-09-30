@@ -84,5 +84,38 @@ drop fuel_station_idx nchoice*
 compress
 
 
+
+preserve
+	clear
+	foreach city in bh cur rec rj sp {
+		append using D:/Dropbox/work/ethanol/data/price/mediancitywideprices_waves1and2_`city'.dta
+		cap gen cityname = strupper("`city'")
+		cap replace cityname = strupper("`city'") if city == ""
+	}
+
+	append using D:/Dropbox/work/ethanol/data/price/mediancitywideprices_wave3_sp.dta
+	replace cityname = "SP" if city == ""
+
+	replace cityname = "CTB" if cityname == "CUR"
+
+
+	gen week = (date - td(2jan2011) - dow(date))/7
+	encode cityname, g(citycode)
+	bys citycode week: keep if _n == 1
+
+	xtset citycode week
+
+	gen lpedivpg = log(pedivpg_median)
+	gen dl_pedivpg = D.lpedivpg
+	compress
+	tempfile prices
+	save `prices'
+restore
+
+
+gen week = (date - td(2jan2011) - dow(date))/7
+compress
+merge m:1 cityname week using `prices', keep(match master) keepusing(dl_pedivpg) nogen 
+
 cap mkdir $datapath/generated
-save $datapath/generated/individual_data_wide_prepared.dta, replace
+saveold $datapath/generated/individual_data_wide_prepared.dta, replace
