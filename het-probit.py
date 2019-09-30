@@ -100,6 +100,11 @@ print('Number of observations {}'.format(len(df)))
 dow_dummies = pd.get_dummies(df['date'].dt.dayofweek, prefix='dv_dow')
 df[dow_dummies.columns[1:]] = dow_dummies[dow_dummies.columns[1:]]
 
+
+#%% generate treatment dummies
+group_dummies = pd.get_dummies(df[grouplbls], prefix='treat', drop_first=True)
+df[group_dummies.columns] = group_dummies
+
 #%%
 
 choice  = df['choice'].values
@@ -117,7 +122,11 @@ nsigma  = (nchoice-1)*nchoice//2 - 1
 nobs    = df.shape[0]
 ngroup  = np.unique(groupid).size
 
-nallsigma = (nsigma+1)*ngroup - 1
+use_dprice = nalpha > 1
+
+ngamma_e = ngroup
+ngamma_m = ngroup+1
+ngamma_em = ngroup+1
 
 stationidold = df['stationid'].astype(int).values
 uniquestationid = np.unique(stationidold)
@@ -140,19 +149,49 @@ xi_idx = np.zeros(nuisancexi.shape, dtype = int) + nxi
 xi_idx[~nuisancexi] = np.arange(nxi)
 
 #%%
-tril_index_matrix = np.zeros((ngroup, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
 
-tril_index = tuple(np.vstack((np.repeat(np.arange(ngroup), nsigma+1), 
-              np.tile(np.tril_indices(nchoice-1), ngroup))).tolist())
+# indices to help pick out the elements in the S matrix to be estimated
+# aka the all the elements in the lower triangle, except the first element,
+# which is set to 1 to normalized the scale of the utilit
 
+# There will be ngroup matrices of size (nchoice-1, nchoice-1)
+# There will be nallsigma parameters to be estimated for these matrices
+# The rest will be zero (the upper triangle except diagonal) or 1 (the first 
+# element for first group)
+# I map all the zero-elements to index (nallsigma+1), the one-element to
+# index-zero, and the rest to index from 1 to nallsigma
+
+# initialized with all (nallsigma+1) indices
+tril_index_matrix = np.zeros((ngroup+1, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
+
+# list of tuples (g,j,k) -- g group, and j,k index of the lower triangles
+tril_index = tuple(np.vstack((np.repeat(np.arange(ngroup+1), nsigma+1), 
+              np.tile(np.tril_indices(nchoice-1), ngroup+1))).tolist())
+
+# set the indices of the lower triangles
+# for 3 groups, 3 choices, this matrix will be
+#[[[0, 9],
+#  [1, 2]],
+# [[3, 9],
+#  [4, 5]],
+# [[6, 9],
+#  [7, 8]]])
 tril_index_matrix[tril_index] = np.arange(nallsigma+1)
 
 np.random.seed(1234)
 
+# use double precision in all calculation
 floatX = 'float64'
+
+# vector of paremeters to be estimated
 theta  = T.dvector('theta')
 
 # unpack parameters
+#   alpha: price sensisivity paramater ()
+#   beta: choice-specific coefficients
+#   sraw: parameters to construct the covariance matrix
+#   xiraw: fuel-station fixed effects that can be identified
+
 offset = 0
 alpha  = theta[offset: offset + nalpha]
 
@@ -160,37 +199,76 @@ offset += nalpha
 beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
 
 offset += nbeta
-sraw = T.concatenate([[1], theta[offset: offset + nallsigma], [0]])
-S = sraw[tril_index_matrix]
+gamma_e = theta[offset: offset + ngamma_e]
+
+offset += ngamma_e
+gamma_m = theta[offset: offset + ngamma_m]
+
+offset += ngamma_m
+gamma_em = theta[offset: offset + ngamma_em]
+
+
+offset += ngamma_em
+xiraw = theta[offset:offset+nxi] if use_fe else 0
+
+# fuel-station fixed effects
+if use_fe:
+    xiraw_padded = T.concatenate([xiraw, [-10000.]])
+    xi = xiraw_padded[xi_idx]
+
 
 Tprice  = theano.shared(price.astype(floatX),  name='price')
 TX      = theano.shared(X.astype(floatX),  name='X')
 TXp     = theano.shared(Xp.astype(floatX), name='Xp')
 
-if use_fe:
-    offset += nallsigma
-    xiraw = T.concatenate([theta[offset:offset+nxi], [-10000.]])
-    xi = xiraw[xi_idx]
-    V = T.dot(alpha,TXp)*Tprice + T.dot(beta,TX) + xi[:,stationid]
-else:
-    V = T.dot(alpha,TXp)*Tprice + T.dot(beta,TX)
+alpha_i = T.dot(alpha, TXp)    
+V = alpha_i*Tprice + T.dot(beta,TX) + (xi[:,stationid] if use_fe else 0)
 
 Vfull   = T.concatenate([T.zeros((1, nobs)), V], axis = 0)
 Vchoice = Vfull[(choice-1,np.arange(nobs))]
 Vnorm   = (Vfull - Vchoice)
 
-nonchoicedummy = np.ones((nobs, nchoice), dtype = bool)
-nonchoicedummy[(range(nobs), choice-1)] = False
-iii = np.arange(nobs*nchoice).reshape(nonchoicedummy.shape)
-nonchoiceidx = iii[nonchoicedummy].reshape((nobs, nchoice-1))
+# N*J matrix to mark which althernatives are not chosen for each motorist
+# initialize with True (not chosen)
+nonchoice_mask = np.ones((nobs, nchoice), dtype = bool)
 
+# mark (i, choice_i) as False (chosen) for each i in range(nobs)
+nonchoice_mask[(range(nobs), choice-1)] = False
+
+# index each motorist-alternative from 0 to N*J-1
+obs_choice_idx = np.arange(nobs*nchoice).reshape((nobs, nchoice))
+
+# pick out all the indices of motorist-alternative that are not a choice
+nonchoiceidx = obs_choice_idx[nonchoice_mask].reshape((nobs, nchoice-1))
+
+# use the above indices to pick out the utilities of althernatives that are 
+# not chosen -- GHK algorithm operates on these utilities
 Vnonchoice = Vnorm.transpose().flatten()[nonchoiceidx].transpose()  
 
 
 #%%
+TXsigma = T.concatenate([alpha_i.reshape((1,-1)), theano.shared(group_dummies.values.transpose())])
+
+var_ze = T.exp(gamma_e.dot(TXsigma))
+var_zm = T.exp(gamma_m[1:].dot(TXsigma) + gamma_m[0])
+var_zem = T.exp(gamma_em[1:].dot(TXsigma) + gamma_em[0])
+cov_zem = (var_zem-1)/(var_zem+1)*T.sqrt(var_ze*var_zm)
+
+
+#%%
+s00 = T.sqrt(var_ze)
+s10 = cov_zem/s00+0.5
+s11 = T.sqrt(var_zm - s10**2)
+s01 = T.zeros(((nobs,)))
+
+S = T.stack([s00, s01, s10, s11]).reshape((2,2,nobs))
+
+#%%
 
 M = np.stack([[[1,0],[0,1]], [[-1,0],[-1,1]], [[0,-1],[1,-1]]])
-MS = T.dot(M, S).dimshuffle((0,2,1,3)).reshape((ngroup*nchoice, nchoice-1, nchoice-1))
+Mi = M[choice-1, :, :]
+
+MS = T.dot(Mi, S).dimshuffle((0,2,1,3)).reshape((nobs*nchoice, nchoice-1, nchoice-1))
 Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1))).reshape((nchoice, ngroup, nchoice-1, nchoice-1))
 
 #%%
@@ -241,10 +319,8 @@ eval_hess = lambda t: np.squeeze(hess(t))
 S0 = np.tril(np.ones(nchoice-1))*0.5 + np.tril(np.eye(nchoice-1))*0.7
 S0 = np.tile(S0, (ngroup,1,1))[tril_index][1:]
 
-theta0 = np.zeros((nalpha + nbeta,))
-theta0 = np.hstack([theta0, S0])
-if use_fe:
-    theta0 = np.hstack([theta0, np.zeros((nxi,))])
+#%%
+theta0 = np.zeros((nalpha + nbeta + ngamma_e + ngamma_m + ngamma_em,))
     
 #%%
 
