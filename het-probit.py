@@ -42,8 +42,9 @@ for x in ['treattype', 'choice', 'consumerid', 'stationid']:
 # old coding: 2 = midgrade gasoline, 3 = ethanol
 # new coding: 2 = ethanol, 3 = midgrad gasoline
 choice = df.choice.values
-df.loc[choice==3, 'choice']=2
-df.loc[choice==2, 'choice']=3
+if 'recoding' in spec and spec['recoding']:
+    df.loc[choice==3, 'choice']=2
+    df.loc[choice==2, 'choice']=3
 
 # drop RJ, drop midgrade ethanol and treatment 3 and 4
 df = df[df.dv_rj==0]
@@ -126,8 +127,8 @@ ngroup  = np.unique(groupid).size
 use_dprice = nalpha > 1
 
 ngamma_e = ngroup
-ngamma_m = ngroup+1
-ngamma_em = ngroup+1
+ngamma_m = ngroup
+ngamma_em = ngroup
 
 stationidold = df['stationid'].astype(int).values
 uniquestationid = np.unique(stationidold)
@@ -141,7 +142,6 @@ dv_choice = np.arange(nchoice).reshape((nchoice,1)) == (choice-1)
 nobsstation = np.array([(stationid==sid).sum() for sid in range(nstation)])
 
 
-#%% nuisance xi
 if use_fe:
     sumchoice_station = np.array([dv_choice[1:, stationid == i].sum(axis = 1) for i in range(nstation)]).transpose()
     nuisancexi = sumchoice_station == 0
@@ -151,6 +151,9 @@ if use_fe:
     xi_idx[~nuisancexi] = np.arange(nxi)
 else:
     nxi = 0
+    
+theta0 = np.zeros((nalpha + nbeta + ngamma_e + ngamma_m + ngamma_em + 2 + nxi,))
+
 #%%
 
 # indices to help pick out the elements in the S matrix to be estimated
@@ -203,6 +206,10 @@ offset += nalpha
 beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
 
 offset += nbeta
+sigma_10 = theta[offset]
+sigma_11 = theta[offset+1]
+
+offset += 2
 gamma_e = theta[offset: offset + ngamma_e]
 
 offset += ngamma_e
@@ -211,7 +218,6 @@ gamma_m = theta[offset: offset + ngamma_m]
 offset += ngamma_m
 gamma_em = theta[offset: offset + ngamma_em]
 
-
 offset += ngamma_em
 xiraw = theta[offset:offset+nxi] if use_fe else 0
 
@@ -219,46 +225,31 @@ xiraw = theta[offset:offset+nxi] if use_fe else 0
 if use_fe:
     xiraw_padded = T.concatenate([xiraw, [-10000.]])
     xi = xiraw_padded[xi_idx]
+    xi_i = xi[:, stationid]
+else:
+    xi_i = 0
 
+M = np.stack([[[1,0],[0,1]], [[-1,0],[-1,1]], [[0,-1],[1,-1]]])
+Mi = M[choice-1, :, :]
 
 Tprice  = theano.shared(price.astype(floatX),  name='price')
 TX      = theano.shared(X.astype(floatX),  name='X')
 TXp     = theano.shared(Xp.astype(floatX), name='Xp')
 
-alpha_i = T.dot(alpha, TXp)    
-V = alpha_i*Tprice + T.dot(beta,TX) 
+alpha_i = T.dot(alpha, TXp)
 
-if use_fe:
-    V = V + xi[:,stationid]
+V = alpha_i*Tprice + T.dot(beta,TX)  + xi_i
 
-Vfull   = T.concatenate([T.zeros((1, nobs)), V], axis = 0)
-Vchoice = Vfull[(choice-1,np.arange(nobs))]
-Vnorm   = (Vfull - Vchoice)
-
-# N*J matrix to mark which althernatives are not chosen for each motorist
-# initialize with True (not chosen)
-nonchoice_mask = np.ones((nobs, nchoice), dtype = bool)
-
-# mark (i, choice_i) as False (chosen) for each i in range(nobs)
-nonchoice_mask[(range(nobs), choice-1)] = False
-
-# index each motorist-alternative from 0 to N*J-1
-obs_choice_idx = np.arange(nobs*nchoice).reshape((nobs, nchoice))
-
-# pick out all the indices of motorist-alternative that are not a choice
-nonchoiceidx = obs_choice_idx[nonchoice_mask].reshape((nobs, nchoice-1))
-
-# use the above indices to pick out the utilities of althernatives that are 
-# not chosen -- GHK algorithm operates on these utilities
-Vnonchoice = Vnorm.transpose().flatten()[nonchoiceidx].transpose()  
+Vnonchoice = T.batched_dot(Mi,V.transpose()).transpose()  
 
 
 #%%
+esigma_11 = T.exp(sigma_11)
+var_zcontrol11 = sigma_10**2 + esigma_11**2
 TXsigma = T.concatenate([alpha_i.reshape((1,-1)) - alpha_i.mean(), theano.shared(group_dummies.values.transpose())])
-
 var_z00 = T.exp(gamma_e.dot(TXsigma))
-var_z11 = T.exp(gamma_m[1:].dot(TXsigma) + gamma_m[0])
-cov_z10 = T.tanh(gamma_em[1:].dot(TXsigma) + gamma_em[0])*T.sqrt(var_z00*var_z11)
+var_z11 = T.exp(gamma_m.dot(TXsigma))*var_zcontrol11
+cov_z10 = T.tanh(gamma_em.dot(TXsigma))*T.sqrt(var_z00*var_z11)
 
 
 #%%
@@ -267,12 +258,14 @@ s10 = cov_z10/s00
 s11 = T.sqrt(var_z11 - s10**2)
 s01 = T.zeros((nobs,))
 
-S = T.stack([s00, s01, s10, s11]).transpose().reshape((nobs,2,2))
+
+s_control = T.stack([1, 0, sigma_10, esigma_11]).dimshuffle(0,'x')
+dv_control = groupid==0
+S = s_control*dv_control + T.stack([s00, s01, s10, s11])*(~dv_control)
+S = S.transpose().reshape((nobs,2,2))
 
 #%%
 
-M = np.stack([[[1,0],[0,1]], [[-1,0],[-1,1]], [[0,-1],[1,-1]]])
-Mi = M[choice-1, :, :]
 
 MS = T.batched_dot(Mi, S)
 Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1)))
@@ -288,7 +281,7 @@ c11 = T.sqrt(Sigma[:,1,1] - c10**2)
 normcdf = lambda x: 0.5 + 0.5*T.erf(x/np.sqrt(2))
 norminv = lambda p: np.sqrt(2)*T.erfinv(2*p-1)
 
-ndraws = 10
+ndraws = spec['ndraw'] if 'ndraw' in spec else 10
 #draws = np.random.random((ndraws,nobs))
 
 draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
@@ -322,7 +315,6 @@ eval_hess = lambda t: np.squeeze(hess(t))
 #    theta0 = np.hstack([theta0, xi0])
 
 #%%
-theta0 = np.zeros((nalpha + nbeta + ngamma_e + ngamma_m + ngamma_em + nxi,))
     
 #%%
 
@@ -646,8 +638,8 @@ print_result_group("variance of ethanol random utility (log)",
     
 print_result_group("variance of midgrade-g random utility (log)",
                    gamma_mhat, gamma_mse, gamma_mt,
-                   ["const", "alpha_i"] + group_dummies.columns.tolist())
+                   ["alpha_i"] + group_dummies.columns.tolist())
 
-print_result_group("corr of midgrade-g random utility (ctanh)",
+print_result_group("corr of midgrade-g random utility (atanh)",
                    gamma_emhat, gamma_emse, gamma_emt,
-                   ["const", "alpha_i"] + group_dummies.columns.tolist())
+                   ["alpha_i"] + group_dummies.columns.tolist())
