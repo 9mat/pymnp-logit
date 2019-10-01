@@ -12,13 +12,13 @@ from solver import solve_unconstr
 #%%
 #specname = sys.argv[1]
 
-#specname = sys.argv[1] if len(sys.arg) > 1 else input("Path to spec: ")
-specname = '../../spec/spec2hetfe'
+specfile = sys.argv[1] if len(sys.argv) > 1 else input("Path to spec: ")
+#specfile = '../../spec/spec2hetfe'
 
 purpose = 'solve'
 subsample = None
 
-with open(specname + '.json', 'r') as f:
+with open(specfile, 'r') as f:
     spec = json.load(f)
     
 inputfile = spec['inputfile'] if 'inputfile' in spec else input("Path to input: ")
@@ -39,11 +39,14 @@ with open(inputfile, 'rb') as fi:
 for x in ['treattype', 'choice', 'consumerid', 'stationid']:
     df[x] = df[x].astype(int)
 
-# old coding: 2 = midgrade gasoline, 3 = ethanol
-# new coding: 2 = ethanol, 3 = midgrad gasoline
+
 choice = df.choice.values
-df.loc[choice==3, 'choice']=2
-df.loc[choice==2, 'choice']=3
+
+if 'recording' and spec and spec['recoding']:
+    # old coding: 2 = midgrade gasoline, 3 = ethanol
+    # new coding: 2 = ethanol, 3 = midgrad gasoline
+    df.loc[choice==3, 'choice']=2
+    df.loc[choice==2, 'choice']=3
 
 # drop RJ, drop midgrade ethanol and treatment 3 and 4
 df = df[df.dv_rj==0]
@@ -82,7 +85,7 @@ df['dv_carclass_suv'] = df.car_class == "SUV"
 df['dv_carclass_smalltruck'] = df.car_class == "Smalltruck"
 df['dv_carclass_subcompact'] = df.car_class == "Subcompact"
 
-df['car_age'] = 2012 - df.car_model_year
+df['car_age'] = np.maximum(df.year - df.car_model_year, 0)
 df['car_lprice'] = np.log(df.car_price_adj)
 
 df['dv_carpriceadj_p0p75'] = 1 - df['dv_carpriceadj_p75p100']
@@ -91,6 +94,11 @@ df['dv_nocollege'] = 1 - df['dv_somecollege']
 
 df['p_ratio'] = df['pe_lt']/df['pg_lt']
 df['e_favor'] = df['p_ratio'] > 0.705
+
+
+if 'dl_pedivpg' in df:
+    df['dl_pedivpg_pos'] = np.maximum (0, df.dl_pedivpg)
+    df['dl_pedivpg_neg'] = np.maximum (0, -df.dl_pedivpg)
 
 if subsample is not None:
     df = df.loc[df[subsample]==1,:]
@@ -142,8 +150,8 @@ xi_idx[~nuisancexi] = np.arange(nxi)
 #%%
 tril_index_matrix = np.zeros((ngroup, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
 
-tril_index = (np.repeat(np.arange(ngroup), nsigma+1), 
-              np.tile(np.tril_indices(nchoice-1), ngroup))
+tril_index = tuple(np.vstack((np.repeat(np.arange(ngroup), nsigma+1), 
+              np.tile(np.tril_indices(nchoice-1), ngroup))).tolist())
 
 tril_index_matrix[tril_index] = np.arange(nallsigma+1)
 
@@ -376,7 +384,7 @@ resultfile = spec['resultfile'] if 'resultfile' in spec else input('Path to resu
 if 'solve' in purpose:
     thetahat = solve_unconstr(theta0, eval_f, eval_grad, eval_hess)
     with open(resultfile, 'w') as outfile:
-        json.dump({'thetahat':thetahat.tolist(), 'specname': specname}, outfile, indent=2)
+        json.dump({'thetahat':thetahat.tolist(), 'specfile': specfile}, outfile, indent=2)
 
 with open(resultfile, 'r') as outfile:
 	results = json.load(outfile)
