@@ -25,6 +25,7 @@ inputfile = spec['inputfile'] if 'inputfile' in spec else input("Path to input: 
     
 Xlbls = spec['X']
 Xplbls = spec['Xp']
+Xsigmalbls = spec['Xsigma'] if 'Xsigma' in spec else []
 pricelbls = spec['price']
 grouplbls = spec['group']
 
@@ -59,12 +60,15 @@ df = df.loc[df.treattype < 3]
 df['const'] = 1
 
 # impute missing prices
-df['pgmidgrade_km_adj'].fillna(value=1e9, inplace=True)
-df['pemidgrade_km_adj'].fillna(value=1e9, inplace=True)
+df['pgmidgrade_km_adj'].fillna(value=1e3, inplace=True)
+df['pemidgrade_km_adj'].fillna(value=1e3, inplace=True)
 
 # relative prices
 df['rel_lpgmidgrade_km_adj'] = np.log(df.pgmidgrade_km_adj) - np.log(df.pg_km_adj)
 df['rel_lpe_km_adj'] = np.log(df.pe_km_adj) - np.log(df.pg_km_adj)
+
+#df['rel_lpgmidgrade_km_adj'] = (df.pgmidgrade_km_adj) - (df.pg_km_adj)
+#df['rel_lpe_km_adj'] = (df.pe_km_adj) - (df.pg_km_adj)
 
 df['ltank'] = np.log(df.car_tank)
 
@@ -93,6 +97,7 @@ df['dv_nocollege'] = 1 - df['dv_somecollege']
 
 df['p_ratio'] = df['pe_lt']/df['pg_lt']
 df['e_favor'] = df['p_ratio'] > 0.705
+ 
 
 if subsample is not None:
     df = df.loc[df[subsample]==1,:]
@@ -102,10 +107,13 @@ print('Number of observations {}'.format(len(df)))
 dow_dummies = pd.get_dummies(df['date'].dt.dayofweek, prefix='dv_dow')
 df[dow_dummies.columns[1:]] = dow_dummies[dow_dummies.columns[1:]]
 
-
-#%% generate treatment dummies
 group_dummies = pd.get_dummies(df[grouplbls], prefix='treat', drop_first=True)
 df[group_dummies.columns] = group_dummies
+
+for x in ['treat_1', 'treat_2']:
+    for y in ['dv_somesecondary', 'dv_somecollege']:
+        df[x+"*"+y] = df[x]&df[y]
+
 
 #%%
 
@@ -113,6 +121,7 @@ choice  = df['choice'].values
 price   = df.loc[:, pricelbls].values.transpose()
 X       = df.loc[:, Xlbls].values.transpose()
 Xp      = df.loc[:, Xplbls].values.transpose()
+Xsigma  = df.loc[:, Xsigmalbls].values.transpose()
 groupid = df.loc[:, grouplbls].values.transpose()
 
 nX, nXp, nchoice  = len(Xlbls), len(Xplbls), len(pricelbls) + 1
@@ -126,9 +135,9 @@ ngroup  = np.unique(groupid).size
 
 use_dprice = nalpha > 1
 
-ngamma_e = ngroup
-ngamma_m = ngroup
-ngamma_em = ngroup
+ngamma_e = len(Xsigmalbls)*2
+ngamma_m = len(Xsigmalbls)*2
+ngamma_em = len(Xsigmalbls)*2
 
 stationidold = df['stationid'].astype(int).values
 uniquestationid = np.unique(stationidold)
@@ -243,10 +252,15 @@ V = alpha_i*Tprice + T.dot(beta,TX)  + xi_i
 Vnonchoice = T.batched_dot(Mi,V.transpose()).transpose()  
 
 
+if use_fe:
+    mask = np.einsum('ijk,ki->ji', Mi, nuisancexi[:,stationid]) == 0
+else:
+    mask = np.abs(np.einsum('ijk,ki->ji', Mi, price)) < 10
+
 #%%
 esigma_11 = T.exp(sigma_11)
 var_zcontrol11 = sigma_10**2 + esigma_11**2
-TXsigma = T.concatenate([alpha_i.reshape((1,-1)) - alpha_i.mean(), theano.shared(group_dummies.values.transpose())])
+TXsigma = T.concatenate([(alpha_i - alpha_i.mean())*Xsigma, Xsigma])
 var_z00 = T.exp(gamma_e.dot(TXsigma))
 var_z11 = T.exp(gamma_m.dot(TXsigma))*var_zcontrol11
 cov_z10 = T.tanh(gamma_em.dot(TXsigma))*T.sqrt(var_z00*var_z11)
@@ -266,11 +280,8 @@ S = S.transpose().reshape((nobs,2,2))
 
 #%%
 
-
 MS = T.batched_dot(Mi, S)
 Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1)))
-
-#%%
 
 c00 = T.sqrt(Sigma[:,0,0])
 c10 = Sigma[:,1,0]/c00
@@ -289,17 +300,29 @@ draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
 prob0 = normcdf(-Vnonchoice[0,:]/c00)
 prob1 = normcdf(-(Vnonchoice[1,:] + c10*norminv(draws*prob0))/c11).mean(axis=0)
 
-nlogl_i = -T.log(prob0) - T.log(prob1)
-nlogl = nlogl_i.sum()
+nlogl_i = -T.log(prob0)*mask[0] - T.log(prob1)*mask[1]
+nlogl = -T.log(prob0).sum() - T.log(prob1[mask[1]]).sum()
 
-obj = nlogl
-eval_f = theano.function([theta], outputs = obj)
-grad = theano.function([theta], outputs = T.grad(obj, [theta]))
-hess = theano.function([theta], outputs = theano.gradient.hessian(obj, [theta]))
+eval_f = theano.function([theta], outputs = nlogl)
+grad = theano.function([theta], outputs = T.grad(nlogl, [theta]))
+hess = theano.function([theta], outputs = theano.gradient.hessian(nlogl, [theta]))
 
 eval_grad = lambda t: np.squeeze(grad(t))
 eval_hess = lambda t: np.squeeze(hess(t))
 
+#%% 
+
+nlog_control = nlogl_i[dv_control].sum()
+
+eval_f_control = theano.function([theta], outputs = nlog_control)
+grad_control = theano.function([theta], outputs = T.grad(nlog_control, [theta]))
+hess_control = theano.function([theta], outputs = theano.gradient.hessian(nlog_control, [theta]))
+
+eval_grad_control = lambda t: np.squeeze(grad_control(t))
+eval_hess_control = lambda t: np.squeeze(hess_control(t))
+
+#theta0 = solve_unconstr(theta0, eval_f_control, eval_grad_control, eval_hess_control)
+#print(theta0)
 
 #%%
 #alpha0 = [-5.63116686]
@@ -573,6 +596,7 @@ gamma_ehat, gamma_ese, gamma_et = get_stat(gamma_e, thetahat)
 gamma_mhat, gamma_mse, gamma_mt = get_stat(gamma_m, thetahat)
 gamma_emhat, gamma_emse, gamma_emt = get_stat(gamma_em, thetahat)
 
+sigma_control_hat, sigma_control_se, sigma_control_t = get_stat(T.stack(sigma_10, var_zcontrol11), thetahat)
 #
 #i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int) # base alternative = 0
 #i2 = np.tile(np.arange(ngroup, dtype=int), nchoice-1)[1:] # groupid
@@ -643,3 +667,10 @@ print_result_group("variance of midgrade-g random utility (log)",
 print_result_group("corr of midgrade-g random utility (atanh)",
                    gamma_emhat, gamma_emse, gamma_emt,
                    ["alpha_i"] + group_dummies.columns.tolist())
+
+print_result_group("Control group covariance",
+                   sigma_control_hat, sigma_control_se, sigma_control_t,
+                   ["cov01", "var11"])
+
+print("Log-likelihood:", eval_f(thetahat))
+print(divider)
