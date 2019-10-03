@@ -42,7 +42,7 @@ for x in ['treattype', 'choice', 'consumerid', 'stationid']:
 
 choice = df.choice.values
 
-if 'recording' and spec and spec['recoding']:
+if 'recording' in spec and spec['recoding']:
     # old coding: 2 = midgrade gasoline, 3 = ethanol
     # new coding: 2 = ethanol, 3 = midgrad gasoline
     df.loc[choice==3, 'choice']=2
