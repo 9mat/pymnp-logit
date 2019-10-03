@@ -665,17 +665,19 @@ for j in range(nchoice-1):
 #                       ["Treatment " + str(j) for j in range(1,ngroup)])
 #
 
+Xsigmatreatlbls_extra = ["alpha_i*" + x for x in group_dummies.columns] if use_price_sensitity_in_sigma else []
+    
 print_result_group("variance of ethanol random utility (log)",
                    gamma_ehat, gamma_ese, gamma_et,
-                   Xsigmatreatlbls)
+                   Xsigmatreatlbls_extra + Xsigmatreatlbls)
     
 print_result_group("variance of midgrade-g random utility (log)",
                    gamma_mhat, gamma_mse, gamma_mt,
-                   Xsigmatreatlbls)
+                   Xsigmatreatlbls_extra + Xsigmatreatlbls)
 
 print_result_group("corr of midgrade-g random utility (atanh)",
                    gamma_emhat, gamma_emse, gamma_emt,
-                   Xsigmatreatlbls)
+                   Xsigmatreatlbls_extra + Xsigmatreatlbls)
 
 print_result_group("Control group covariance",
                    sigma_control_hat, sigma_control_se, sigma_control_t,
