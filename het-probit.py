@@ -33,6 +33,9 @@ use_fe = spec['use_fe'] if 'use_fe' in spec else False
 use_share_moments = spec['use_share_moment'] if 'use_share_moment' in spec else False
 subsample = spec['subsample'] if 'subsample' in spec else None
 
+
+use_price_sensitity_in_sigma = ('price_sensitity_in_sigma' in spec and spec['price_sensitity_in_sigma'])
+
 with open(inputfile, 'rb') as fi:
     df = pd.read_stata(fi)
 
@@ -110,10 +113,12 @@ df[dow_dummies.columns[1:]] = dow_dummies[dow_dummies.columns[1:]]
 group_dummies = pd.get_dummies(df[grouplbls], prefix='treat', drop_first=True)
 df[group_dummies.columns] = group_dummies
 
-for x in ['treat_1', 'treat_2']:
-    for y in ['dv_somesecondary', 'dv_somecollege']:
-        df[x+"*"+y] = df[x]&df[y]
-
+Xsigmatreatlbls = []
+for x in group_dummies.columns:
+    for y in Xsigmalbls:
+        df[y+"*"+x] = df[x]*df[y]
+        Xsigmatreatlbls.append(y+"*"+x)
+    
 
 #%%
 
@@ -135,9 +140,9 @@ ngroup  = np.unique(groupid).size
 
 use_dprice = nalpha > 1
 
-ngamma_e = len(Xsigmalbls)*2
-ngamma_m = len(Xsigmalbls)*2
-ngamma_em = len(Xsigmalbls)*2
+ngamma = len(Xsigmalbls) + use_price_sensitity_in_sigma
+ngamma_e = ngamma_m = ngamma_em = ngamma*(ngroup-1)
+ 
 
 stationidold = df['stationid'].astype(int).values
 uniquestationid = np.unique(stationidold)
@@ -260,7 +265,11 @@ else:
 #%%
 esigma_11 = T.exp(sigma_11)
 var_zcontrol11 = sigma_10**2 + esigma_11**2
-TXsigma = T.concatenate([(alpha_i - alpha_i.mean())*Xsigma, Xsigma])
+
+TXsigma = theano.shared(df[Xsigmatreatlbls].values.transpose().astype(floatX))
+
+if use_price_sensitity_in_sigma:
+    TXsigma = T.concatenate([TXsigma, (alpha_i-alpha_i.mean())*group_dummies.values.transpose().astype(floatX)])
 var_z00 = T.exp(gamma_e.dot(TXsigma))
 var_z11 = T.exp(gamma_m.dot(TXsigma))*var_zcontrol11
 cov_z10 = T.tanh(gamma_em.dot(TXsigma))*T.sqrt(var_z00*var_z11)
@@ -658,15 +667,15 @@ for j in range(nchoice-1):
 
 print_result_group("variance of ethanol random utility (log)",
                    gamma_ehat, gamma_ese, gamma_et,
-                   ["alpha_i"] + group_dummies.columns.tolist())
+                   Xsigmatreatlbls)
     
 print_result_group("variance of midgrade-g random utility (log)",
                    gamma_mhat, gamma_mse, gamma_mt,
-                   ["alpha_i"] + group_dummies.columns.tolist())
+                   Xsigmatreatlbls)
 
 print_result_group("corr of midgrade-g random utility (atanh)",
                    gamma_emhat, gamma_emse, gamma_emt,
-                   ["alpha_i"] + group_dummies.columns.tolist())
+                   Xsigmatreatlbls)
 
 print_result_group("Control group covariance",
                    sigma_control_hat, sigma_control_se, sigma_control_t,
