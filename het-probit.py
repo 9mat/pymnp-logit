@@ -13,7 +13,7 @@ from solver import solve_unconstr
 #specname = sys.argv[1]
 
 specfile = sys.argv[1] if len(sys.argv) > 1 else input("Path to spec: ")
-#specname = '../../spec/spec2hetfe'
+#specfile = '../../spec/spec2hetfe'
 
 purpose = 'solve'
 subsample = None
@@ -39,11 +39,14 @@ with open(inputfile, 'rb') as fi:
 for x in ['treattype', 'choice', 'consumerid', 'stationid']:
     df[x] = df[x].astype(int)
 
-# old coding: 2 = midgrade gasoline, 3 = ethanol
-# new coding: 2 = ethanol, 3 = midgrad gasoline
+
 choice = df.choice.values
-df.loc[choice==3, 'choice']=2
-df.loc[choice==2, 'choice']=3
+
+if 'recording' in spec and spec['recoding']:
+    # old coding: 2 = midgrade gasoline, 3 = ethanol
+    # new coding: 2 = ethanol, 3 = midgrad gasoline
+    df.loc[choice==3, 'choice']=2
+    df.loc[choice==2, 'choice']=3
 
 # drop RJ, drop midgrade ethanol and treatment 3 and 4
 df = df[df.dv_rj==0]
@@ -82,7 +85,7 @@ df['dv_carclass_suv'] = df.car_class == "SUV"
 df['dv_carclass_smalltruck'] = df.car_class == "Smalltruck"
 df['dv_carclass_subcompact'] = df.car_class == "Subcompact"
 
-df['car_age'] = 2012 - df.car_model_year
+df['car_age'] = np.maximum(df.year - df.car_model_year, 0)
 df['car_lprice'] = np.log(df.car_price_adj)
 
 df['dv_carpriceadj_p0p75'] = 1 - df['dv_carpriceadj_p75p100']
@@ -91,6 +94,11 @@ df['dv_nocollege'] = 1 - df['dv_somecollege']
 
 df['p_ratio'] = df['pe_lt']/df['pg_lt']
 df['e_favor'] = df['p_ratio'] > 0.705
+
+
+if 'dl_pedivpg' in df:
+    df['dl_pedivpg_pos'] = np.maximum (0, df.dl_pedivpg)
+    df['dl_pedivpg_neg'] = np.maximum (0, -df.dl_pedivpg)
 
 if subsample is not None:
     df = df.loc[df[subsample]==1,:]
