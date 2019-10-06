@@ -103,6 +103,9 @@ df['p_ratio'] = df['pe_lt']/df['pg_lt']
 df['e_favor'] = df['p_ratio'] > 0.705
  
 
+if 'dl_pedivpg' in df:
+    df['abs_dl_pedivpg'] = pd.abs(df.dl_pedivpg)
+
 if subsample is not None:
     df = df.loc[df[subsample]==1,:]
 print('Number of observations {}'.format(len(df)))
@@ -119,7 +122,11 @@ for x in group_dummies.columns:
     for y in Xsigmalbls:
         df[y+"*"+x] = df[x]*df[y]
         Xsigmatreatlbls.append(y+"*"+x)
+
+all_Xlbls = Xlbls + Xplbls + Xsigmalbls
     
+if ('dl_pedivpg' in all_Xlbls) or ('abs_dl_pedivpg' in all_Xlbls):
+    df = df[~pd.isna(df.dl_pedivpg)]
 
 #%%
 
