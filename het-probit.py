@@ -15,7 +15,8 @@ from solver import solve_unconstr
 specfile = sys.argv[1] if len(sys.argv) > 1 else input("Path to spec: ")
 #specname = '../../spec/spec2hetfe'
 
-purpose = 'solve'
+purpose = sys.argv[2] if len(sys.argv) > 2 else 'solve'
+
 subsample = None
 
 with open(specfile, 'r') as f:
@@ -552,31 +553,32 @@ tstat = thetahat/sehat
 
 #%%
 
-marginal_effects = {}
+if 'mfx' in purpose: 
+    marginal_effects = {}
 
-for mfx in filter(lambda k: k.startswith("mfx_dv_"), spec):
-    marginal_effects.update(cal_marginal_effect_dummies(thetahat, spec[mfx]))
+    for mfx in filter(lambda k: k.startswith("mfx_dv_"), spec):
+        marginal_effects.update(cal_marginal_effect_dummies(thetahat, spec[mfx]))
 
-for mfx in filter(lambda k: k.startswith("mfx_ct_"), spec):
-    marginal_effects.update(cal_marginal_effect_continuous(thetahat, mfx[7:], spec[mfx]))
+    for mfx in filter(lambda k: k.startswith("mfx_ct_"), spec):
+        marginal_effects.update(cal_marginal_effect_continuous(thetahat, mfx[7:], spec[mfx]))
 
-X1df = df.loc[:, pricelbls].copy()
-X2df = X1df.copy()
-X2df -= 0.01
-X1 = X1df.values.astype(np.float64).transpose()
-X2 = X2df.values.astype(np.float64).transpose()
-ehat, ese = cal_marginal_effect(thetahat, Tprice, X1, X2)
-marginal_effects['rel_lpg_km_adj'] = [ehat/0.01, ese/0.01]
+    X1df = df.loc[:, pricelbls].copy()
+    X2df = X1df.copy()
+    X2df -= 0.01
+    X1 = X1df.values.astype(np.float64).transpose()
+    X2 = X2df.values.astype(np.float64).transpose()
+    ehat, ese = cal_marginal_effect(thetahat, Tprice, X1, X2)
+    marginal_effects['rel_lpg_km_adj'] = [ehat/0.01, ese/0.01]
     
-marginal_effects_serialized = {}
-for k, v in marginal_effects.items():
-    marginal_effects_serialized[k] = [x.tolist() for x in v]
+    marginal_effects_serialized = {}
+    for k, v in marginal_effects.items():
+        marginal_effects_serialized[k] = [x.tolist() for x in v]
 
-mfxfile = spec['mfxfile'] if 'mfxfile' in spec else input('Path to mfx (empty to skip saving): ')
+    mfxfile = spec['mfxfile'] if 'mfxfile' in spec else input('Path to mfx (empty to skip saving): ')
 
-if mfxfile:
-    with open(mfxfile, 'w') as outfile:
-        json.dump(marginal_effects_serialized, outfile, indent=2)
+    if mfxfile:
+        with open(mfxfile, 'w') as outfile:
+            json.dump(marginal_effects_serialized, outfile, indent=2)
 
 #%%
 #if use_fe and use_share_moments:
