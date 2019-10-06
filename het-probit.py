@@ -15,7 +15,7 @@ from solver import solve_unconstr
 specfile = sys.argv[1] if len(sys.argv) > 1 else input("Path to spec: ")
 #specname = '../../spec/spec2hetfe'
 
-purpose = sys.argv[2] if len(sys.argv) > 2 else 'solve'
+purpose = sys.argv[2] if len(sys.argv) > 2 else input("Purpose (solve/mfx/display): ")
 
 subsample = None
 
@@ -671,15 +671,15 @@ Xsigmatreatlbls_extra = ["alpha_i*" + x for x in group_dummies.columns] if use_p
     
 print_result_group("variance of ethanol random utility (log)",
                    gamma_ehat, gamma_ese, gamma_et,
-                   Xsigmatreatlbls_extra + Xsigmatreatlbls)
+                   Xsigmatreatlbls + Xsigmatreatlbls_extra)
     
 print_result_group("variance of midgrade-g random utility (log)",
                    gamma_mhat, gamma_mse, gamma_mt,
-                   Xsigmatreatlbls_extra + Xsigmatreatlbls)
+                   Xsigmatreatlbls + Xsigmatreatlbls_extra)
 
 print_result_group("corr of midgrade-g random utility (atanh)",
                    gamma_emhat, gamma_emse, gamma_emt,
-                   Xsigmatreatlbls_extra + Xsigmatreatlbls)
+                   Xsigmatreatlbls + + Xsigmatreatlbls_extra)
 
 print_result_group("Control group covariance",
                    sigma_control_hat, sigma_control_se, sigma_control_t,
