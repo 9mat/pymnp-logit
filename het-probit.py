@@ -212,7 +212,7 @@ iii = (choice-1, groupid)
 normcdf = lambda x: 0.5 + 0.5*T.erf(x/np.sqrt(2))
 norminv = lambda p: np.sqrt(2)*T.erfinv(2*p-1)
     
-ndraws = 10
+ndraws = 100
 #draws = np.random.random((ndraws,nobs))
 
 draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
