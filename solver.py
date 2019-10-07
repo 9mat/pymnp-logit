@@ -9,6 +9,7 @@ try:
     #from knitro.numpy import Variables, Callback, KN_RC_EVALFC, KN_RC_EVALGA, KN_RC_EVALH, KN_RC_EVALH_NO_F, KN_DENSE, KN_DENSE_ROWMAJOR, optimize, KN_OUTLEV_ALL
     
     from knitro.numpy import *
+    import os.path
     
     def solve_unconstr(theta0, eval_f, eval_grad, eval_hess=None):
 
@@ -73,6 +74,9 @@ try:
         except:
             print ("Failed to find a valid license.")
             quit ()
+            
+        if os.path.isfile("knitro.opt"):
+            KN_load_param_file(kc, "kitro.opt")
         
         KN_add_vars (kc, len(theta0))
         KN_set_var_primal_init_values (kc, xInitVals = theta0)        
