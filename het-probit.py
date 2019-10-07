@@ -44,6 +44,11 @@ with open(inputfile, 'rb') as fi:
 for x in ['treattype', 'choice', 'consumerid', 'stationid']:
     df[x] = df[x].astype(int)
 
+all_Xlbls = Xlbls + Xplbls + Xsigmalbls
+    
+if any(x in all_Xlbls for x in ['dl_pedivpg', 'abs_dl_pedivpg', 'pos_dl_pedivpg', 'neg_dl_pedivpg']):
+    df = df[~pd.isna(df.dl_pedivpg)]
+
 # old coding: 2 = midgrade gasoline, 3 = ethanol
 # new coding: 2 = ethanol, 3 = midgrad gasoline
 choice = df.choice.values
@@ -104,7 +109,9 @@ df['e_favor'] = df['p_ratio'] > 0.705
  
 
 if 'dl_pedivpg' in df:
-    df['abs_dl_pedivpg'] = pd.abs(df.dl_pedivpg)
+    df['abs_dl_pedivpg'] = np.abs(df.dl_pedivpg)
+    df['pos_dl_pedivpg'] = np.maximum(0, df.dl_pedivpg)
+    df['neg_dl_pedivpg'] = np.maximum(0, -df.dl_pedivpg)
 
 if subsample is not None:
     df = df.loc[df[subsample]==1,:]
@@ -123,10 +130,6 @@ for x in group_dummies.columns:
         df[y+"*"+x] = df[x]*df[y]
         Xsigmatreatlbls.append(y+"*"+x)
 
-all_Xlbls = Xlbls + Xplbls + Xsigmalbls
-    
-if ('dl_pedivpg' in all_Xlbls) or ('abs_dl_pedivpg' in all_Xlbls):
-    df = df[~pd.isna(df.dl_pedivpg)]
 
 #%%
 
@@ -275,12 +278,15 @@ esigma_11 = T.exp(sigma_11)
 var_zcontrol11 = sigma_10**2 + esigma_11**2
 
 TXsigma = theano.shared(df[Xsigmatreatlbls].values.transpose().astype(floatX))
+Tgroup_dummies = theano.shared(group_dummies.values.transpose().astype(floatX))
 
+TXsigmafull = TXsigma
 if use_price_sensitity_in_sigma:
-    TXsigma = T.concatenate([TXsigma, (alpha_i-alpha_i.mean())*group_dummies.values.transpose().astype(floatX)])
-var_z00 = T.exp(gamma_e.dot(TXsigma))
-var_z11 = T.exp(gamma_m.dot(TXsigma))*var_zcontrol11
-cov_z10 = T.tanh(gamma_em.dot(TXsigma))*T.sqrt(var_z00*var_z11)
+    TXsigmafull = T.concatenate([TXsigmafull, (alpha_i-alpha_i.mean())*Tgroup_dummies])
+    
+var_z00 = T.exp(gamma_e.dot(TXsigmafull))
+var_z11 = T.exp(gamma_m.dot(TXsigmafull))*var_zcontrol11
+cov_z10 = T.tanh(gamma_em.dot(TXsigmafull))*T.sqrt(var_z00*var_z11)
 
 
 #%%
@@ -292,7 +298,8 @@ s01 = T.zeros((nobs,))
 
 s_control = T.stack([1, 0, sigma_10, esigma_11]).dimshuffle(0,'x')
 dv_control = groupid==0
-S = s_control*dv_control + T.stack([s00, s01, s10, s11])*(~dv_control)
+Tdv_control = theano.shared(dv_control)
+S = s_control*Tdv_control + T.stack([s00, s01, s10, s11])*(~Tdv_control)
 S = S.transpose().reshape((nobs,2,2))
 
 #%%
@@ -539,24 +546,25 @@ thetahat = np.array(results['thetahat'])
 
 #%%
 
-jacobian = theano.gradient.jacobian(nlogl_i, theta)
-eval_jab = theano.function([theta], jacobian)
-
-
-Jhat = eval_jab(thetahat)
-covhat = np.linalg.pinv(eval_hess(thetahat))
-
-GG = Jhat.transpose().dot(Jhat)
-GGclustered = np.zeros_like(GG)
-for stid in df.stationid.unique():
-    Jsubhat = Jhat[(df.stationid==stid).nonzero()].sum(axis=0)
-    GGclustered += np.outer(Jsubhat, Jsubhat)
-
-covhatclustered = np.matmul(covhat, np.matmul(GGclustered, covhat))
-
-covhat = covhatclustered
-sehat = np.sqrt(np.diag(covhat))
-tstat = thetahat/sehat
+if any(p in purpose for p in ['se', 'mfx', 'display', 'cf']):
+    jacobian = theano.gradient.jacobian(nlogl_i, theta)
+    eval_jab = theano.function([theta], jacobian)
+    
+    
+    Jhat = eval_jab(thetahat)
+    covhat = np.linalg.pinv(eval_hess(thetahat))
+    
+    GG = Jhat.transpose().dot(Jhat)
+    GGclustered = np.zeros_like(GG)
+    for stid in df.stationid.unique():
+        Jsubhat = Jhat[(df.stationid==stid).nonzero()].sum(axis=0)
+        GGclustered += np.outer(Jsubhat, Jsubhat)
+    
+    covhatclustered = np.matmul(covhat, np.matmul(GGclustered, covhat))
+    
+    covhat = covhatclustered
+    sehat = np.sqrt(np.diag(covhat))
+    tstat = thetahat/sehat
 
 #%%
 
@@ -607,90 +615,122 @@ def get_stat(f, thetahat):
     return fhat, fse, ftstat
     
 #%%
-
-alphahat, alphase, alphatstat = get_stat(alpha, thetahat)
-betahat, betase, betatstat = get_stat(beta.flatten(), thetahat)
-gamma_ehat, gamma_ese, gamma_et = get_stat(gamma_e, thetahat)
-gamma_mhat, gamma_mse, gamma_mt = get_stat(gamma_m, thetahat)
-gamma_emhat, gamma_emse, gamma_emt = get_stat(gamma_em, thetahat)
-
-sigma_control_hat, sigma_control_se, sigma_control_t = get_stat(T.stack(sigma_10, var_zcontrol11), thetahat)
-#
-#i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int) # base alternative = 0
-#i2 = np.tile(np.arange(ngroup, dtype=int), nchoice-1)[1:] # groupid
-#i3 = np.repeat(np.arange(nchoice-1, dtype=int), ngroup)[1:] # variance (diagonal element of each choice)
-#iii = (i1,i2,i3,i3)
-#Sigmamain = Sigma[iii]
-#
-#mm = np.hstack((-np.ones((2,1)), np.eye(2)))
-#mm = scipy.linalg.block_diag(np.eye(2), *([mm]*(ngroup*2//3-1)))
-#effect = T.dot(mm, T.log(Sigmamain))
-#
-#Sigmahat, Sigmase, Sigmatstat = get_stat(Sigmamain, thetahat)
-#effecthat, effectse, effecttstat = get_stat(effect, thetahat)
-
-choicelbls = ['ethanol', 'midgrade gasoline']
-
-formatstr = "%30s%10.3f%10.3f%10.3f"
-formatstr2 = "%30s%10.3f%10s%10s"
-divider = '*'*(30+10+10+10)
-divider2 = '-'*(30+10+10+10)
-print(divider)
-print("%30s%10s%10s%10s" % ('', 'coeff', 'se', 't'))
-print(' '*30 + '-'*30)
-print('*** price sensitiviy ***')
-for i in range(len(Xplbls)):
-    print(formatstr % (Xplbls[i], thetahat[i], sehat[i], tstat[i]))
-print(divider)
-
-def print_result_row(coeff, se, t, label):
-    print(formatstr % (label, coeff, se, t))
     
-def print_result_group(grouplabel, coeffs, ses, ts, labels):
-    print(grouplabel)
-    for coef, se, t, lbl in zip(coeffs, ses, ts, labels):
-        print_result_row(coef, se, t, lbl)
-    print(divider2)
+if 'display' in purpose:
+    alphahat, alphase, alphatstat = get_stat(alpha, thetahat)
+    betahat, betase, betatstat = get_stat(beta.flatten(), thetahat)
+    gamma_ehat, gamma_ese, gamma_et = get_stat(gamma_e, thetahat)
+    gamma_mhat, gamma_mse, gamma_mt = get_stat(gamma_m, thetahat)
+    gamma_emhat, gamma_emse, gamma_emt = get_stat(gamma_em, thetahat)
     
-for j in range(nchoice-1):
-    idx = range(j*nX, (j+1)*nX)
-    print_result_group("utiltiy of " + choicelbls[j],
-                       betahat[idx], betase[idx], betatstat[idx], Xlbls)
-#
-#print_result_group("variance of random utility, " + choicelbls[0],
-#                   Sigmahat[:ngroup-1], Sigmase[:ngroup-1], Sigmatstat[:ngroup-1],
-#                   ["Treatment " + str(j) for j in range(1,ngroup)])
-#
-#for j in range(1,nchoice-1):
-#    idx = range(j*ngroup-1, (j+1)*ngroup-1)
-#    print_result_group("variance of random utility, " + choicelbls[j],
-#                       Sigmahat[idx], Sigmase[idx], Sigmatstat[idx],
-#                       ["Treatment " + str(j) for j in range(ngroup)])
-#
-#for j in range(nchoice-1):
-#    idx = range(j*(ngroup*2//3), (j+1)*(ngroup*2//3))
-#    print_result_group("effect on log(variance of random utility, " + choicelbls[j] + ")",
-#                       effecthat[idx], effectse[idx], effecttstat[idx],
-#                       ["Treatment " + str(j) for j in range(1,ngroup)])
-#
-
-Xsigmatreatlbls_extra = ["alpha_i*" + x for x in group_dummies.columns] if use_price_sensitity_in_sigma else []
+    sigma_control_hat, sigma_control_se, sigma_control_t = get_stat(T.stack(sigma_10, var_zcontrol11), thetahat)
+    #
+    #i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int) # base alternative = 0
+    #i2 = np.tile(np.arange(ngroup, dtype=int), nchoice-1)[1:] # groupid
+    #i3 = np.repeat(np.arange(nchoice-1, dtype=int), ngroup)[1:] # variance (diagonal element of each choice)
+    #iii = (i1,i2,i3,i3)
+    #Sigmamain = Sigma[iii]
+    #
+    #mm = np.hstack((-np.ones((2,1)), np.eye(2)))
+    #mm = scipy.linalg.block_diag(np.eye(2), *([mm]*(ngroup*2//3-1)))
+    #effect = T.dot(mm, T.log(Sigmamain))
+    #
+    #Sigmahat, Sigmase, Sigmatstat = get_stat(Sigmamain, thetahat)
+    #effecthat, effectse, effecttstat = get_stat(effect, thetahat)
     
-print_result_group("variance of ethanol random utility (log)",
-                   gamma_ehat, gamma_ese, gamma_et,
-                   Xsigmatreatlbls + Xsigmatreatlbls_extra)
+    choicelbls = ['ethanol', 'midgrade gasoline']
     
-print_result_group("variance of midgrade-g random utility (log)",
-                   gamma_mhat, gamma_mse, gamma_mt,
-                   Xsigmatreatlbls + Xsigmatreatlbls_extra)
+    formatstr = "%30s%10.3f%10.3f%10.3f"
+    formatstr2 = "%30s%10.3f%10s%10s"
+    divider = '*'*(30+10+10+10)
+    divider2 = '-'*(30+10+10+10)
+    print(divider)
+    print("%30s%10s%10s%10s" % ('', 'coeff', 'se', 't'))
+    print(' '*30 + '-'*30)
+    print('*** price sensitiviy ***')
+    for i in range(len(Xplbls)):
+        print(formatstr % (Xplbls[i], thetahat[i], sehat[i], tstat[i]))
+    print(divider)
+    
+    def print_result_row(coeff, se, t, label):
+        print(formatstr % (label, coeff, se, t))
+        
+    def print_result_group(grouplabel, coeffs, ses, ts, labels):
+        print(grouplabel)
+        for coef, se, t, lbl in zip(coeffs, ses, ts, labels):
+            print_result_row(coef, se, t, lbl)
+        print(divider2)
+        
+    for j in range(nchoice-1):
+        idx = range(j*nX, (j+1)*nX)
+        print_result_group("utiltiy of " + choicelbls[j],
+                           betahat[idx], betase[idx], betatstat[idx], Xlbls)
+    #
+    #print_result_group("variance of random utility, " + choicelbls[0],
+    #                   Sigmahat[:ngroup-1], Sigmase[:ngroup-1], Sigmatstat[:ngroup-1],
+    #                   ["Treatment " + str(j) for j in range(1,ngroup)])
+    #
+    #for j in range(1,nchoice-1):
+    #    idx = range(j*ngroup-1, (j+1)*ngroup-1)
+    #    print_result_group("variance of random utility, " + choicelbls[j],
+    #                       Sigmahat[idx], Sigmase[idx], Sigmatstat[idx],
+    #                       ["Treatment " + str(j) for j in range(ngroup)])
+    #
+    #for j in range(nchoice-1):
+    #    idx = range(j*(ngroup*2//3), (j+1)*(ngroup*2//3))
+    #    print_result_group("effect on log(variance of random utility, " + choicelbls[j] + ")",
+    #                       effecthat[idx], effectse[idx], effecttstat[idx],
+    #                       ["Treatment " + str(j) for j in range(1,ngroup)])
+    #
+    
+    Xsigmatreatlbls_extra = ["alpha_i*" + x for x in group_dummies.columns] if use_price_sensitity_in_sigma else []
+        
+    print_result_group("variance of ethanol random utility (log)",
+                       gamma_ehat, gamma_ese, gamma_et,
+                       Xsigmatreatlbls + Xsigmatreatlbls_extra)
+        
+    print_result_group("variance of midgrade-g random utility (log)",
+                       gamma_mhat, gamma_mse, gamma_mt,
+                       Xsigmatreatlbls + Xsigmatreatlbls_extra)
+    
+    print_result_group("corr of midgrade-g random utility (atanh)",
+                       gamma_emhat, gamma_emse, gamma_emt,
+                       Xsigmatreatlbls + Xsigmatreatlbls_extra)
+    
+    print_result_group("Control group covariance",
+                       sigma_control_hat, sigma_control_se, sigma_control_t,
+                       ["cov01", "var11"])
+    
+    print("Log-likelihood:", eval_f(thetahat))
+    print(divider)
 
-print_result_group("corr of midgrade-g random utility (atanh)",
-                   gamma_emhat, gamma_emse, gamma_emt,
-                   Xsigmatreatlbls + + Xsigmatreatlbls_extra)
 
-print_result_group("Control group covariance",
-                   sigma_control_hat, sigma_control_se, sigma_control_t,
-                   ["cov01", "var11"])
+#TXsigma = theano.shared(df[Xsigmatreatlbls].values.transpose().astype(floatX))
 
-print("Log-likelihood:", eval_f(thetahat))
-print(divider)
+#Xsigmatreatlbls = []
+#for x in group_dummies.columns:
+#    for y in Xsigmalbls:
+#        df[y+"*"+x] = df[x]*df[y]
+#        Xsigmatreatlbls.append(y+"*"+x)
+
+if 'cf' in purpose:
+    group_dummies_cf = {x: group_dummies.copy() for x in ['control'] + group_dummies.columns}
+    Xsigma_cf = {x: df[Xsigmatreatlbls].copy() for x in ['control'] + group_dummies.columns}
+    
+    for x_cf in group_dummies.columns:
+        for x in group_dummies.columns:
+            group_dummies_cf[x_cf][x] = x_cf == x
+        
+        for x in group_dummies.columns:
+            for y in Xsigmalbls:
+                Xsigma_cf[x_cf][y+"*"+x] = df[y]*(x == 'treat_1')
+    
+        
+        TXsigma.set_value(Xsigma_cf[x_cf].values.transpose().astype(floatX))
+        Tgroup_dummies.set_values(group_dummies_cf[x_cf].values.transpose().astype(floatX))
+    
+    
+if 'se' in purpose:
+    with open(resultfile, 'w') as outfile:
+        json.dump({'thetahat':thetahat.tolist(), 'thetase': sehat.tolist(), 'specfile': specfile}, outfile, indent=2)
+    
