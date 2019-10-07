@@ -76,7 +76,7 @@ try:
             quit ()
             
         if os.path.isfile("knitro.opt"):
-            KN_load_param_file(kc, "kitro.opt")
+            KN_load_param_file(kc, "knitro.opt")
         
         KN_add_vars (kc, len(theta0))
         KN_set_var_primal_init_values (kc, xInitVals = theta0)        
