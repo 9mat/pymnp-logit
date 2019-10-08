@@ -76,8 +76,8 @@ df['pemidgrade_km_adj'].fillna(value=1e3, inplace=True)
 df['rel_lpgmidgrade_km_adj'] = np.log(df.pgmidgrade_km_adj) - np.log(df.pg_km_adj)
 df['rel_lpe_km_adj'] = np.log(df.pe_km_adj) - np.log(df.pg_km_adj)
 
-#df['rel_lpgmidgrade_km_adj'] = (df.pgmidgrade_km_adj) - (df.pg_km_adj)
-#df['rel_lpe_km_adj'] = (df.pe_km_adj) - (df.pg_km_adj)
+df['rel_pgmidgrade_km_adj'] = (df.pgmidgrade_km_adj) - (df.pg_km_adj)
+df['rel_pe_km_adj'] = (df.pe_km_adj) - (df.pg_km_adj)
 
 df['ltank'] = np.log(df.car_tank)
 
@@ -124,11 +124,13 @@ df[dow_dummies.columns[1:]] = dow_dummies[dow_dummies.columns[1:]]
 group_dummies = pd.get_dummies(df[grouplbls], prefix='treat', drop_first=True)
 df[group_dummies.columns] = group_dummies
 
-Xsigmatreatlbls = []
+Xsigmatreatlbls = Xsigmalbls[:]
 for x in group_dummies.columns:
     for y in Xsigmalbls:
         df[y+"*"+x] = df[x]*df[y]
         Xsigmatreatlbls.append(y+"*"+x)
+        
+Xsigmatreatlbls_noconst = [x for x in Xsigmatreatlbls if x != 'const']
 
 
 #%%
@@ -152,7 +154,8 @@ ngroup  = np.unique(groupid).size
 use_dprice = nalpha > 1
 
 ngamma = len(Xsigmalbls) + use_price_sensitity_in_sigma
-ngamma_e = ngamma_m = ngamma_em = ngamma*(ngroup-1)
+ngamma_e = ngamma_m = ngamma_em = ngamma*(ngroup-1) + ngamma - use_price_sensitity_in_sigma
+ngamma_e -= ('const' in Xsigmalbls)
  
 
 stationidold = df['stationid'].astype(int).values
@@ -178,6 +181,9 @@ else:
     nxi = 0
     
 theta0 = np.zeros((nalpha + nbeta + ngamma_e + ngamma_m + ngamma_em + 2 + nxi,))
+
+if 'rel_pe_km_adj' in pricelbls:
+    theta0[0] = -30
 
 #%%
 
@@ -231,10 +237,6 @@ offset += nalpha
 beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
 
 offset += nbeta
-sigma_10 = theta[offset]
-sigma_11 = theta[offset+1]
-
-offset += 2
 gamma_e = theta[offset: offset + ngamma_e]
 
 offset += ngamma_e
@@ -274,18 +276,27 @@ else:
     mask = np.abs(np.einsum('ijk,ki->ji', Mi, price)) < 10
 
 #%%
-esigma_11 = T.exp(sigma_11)
-var_zcontrol11 = sigma_10**2 + esigma_11**2
+#esigma_11 = T.exp(sigma_11)
+#var_zcontrol11 = sigma_10**2 + esigma_11**2
+    
 
 TXsigma = theano.shared(df[Xsigmatreatlbls].values.transpose().astype(floatX))
+TXsigma_noconst = theano.shared(df[Xsigmatreatlbls_noconst].values.transpose().astype(floatX))
 Tgroup_dummies = theano.shared(group_dummies.values.transpose().astype(floatX))
 
 TXsigmafull = TXsigma
+TXsigmafull_noconst = TXsigma_noconst
 if use_price_sensitity_in_sigma:
     TXsigmafull = T.concatenate([TXsigmafull, (alpha_i-alpha_i.mean())*Tgroup_dummies])
+    TXsigmafull_noconst = T.concatenate([TXsigma_noconst, (alpha_i-alpha_i.mean())*Tgroup_dummies])
     
-var_z00 = T.exp(gamma_e.dot(TXsigmafull))
-var_z11 = T.exp(gamma_m.dot(TXsigmafull))*var_zcontrol11
+dv_control = groupid==0
+Tdv_control = theano.shared(dv_control)
+
+var_z00 = T.exp(gamma_e.dot(TXsigmafull_noconst))
+#var_z11 = T.exp(gamma_m.dot(TXsigmafull))*var_zcontrol11
+#cov_z10 = T.tanh(gamma_em.dot(TXsigmafull))*T.sqrt(var_z00*var_z11)
+var_z11 = T.exp(gamma_m.dot(TXsigmafull))
 cov_z10 = T.tanh(gamma_em.dot(TXsigmafull))*T.sqrt(var_z00*var_z11)
 
 
@@ -296,10 +307,11 @@ s11 = T.sqrt(var_z11 - s10**2)
 s01 = T.zeros((nobs,))
 
 
-s_control = T.stack([1, 0, sigma_10, esigma_11]).dimshuffle(0,'x')
-dv_control = groupid==0
-Tdv_control = theano.shared(dv_control)
-S = s_control*Tdv_control + T.stack([s00, s01, s10, s11])*(~Tdv_control)
+#s_control = T.stack([1, 0, sigma_10, esigma_11]).dimshuffle(0,'x')
+#dv_control = groupid==0
+#Tdv_control = theano.shared(dv_control)
+#S = s_control*Tdv_control + T.stack([s00, s01, s10, s11])*(~Tdv_control)
+S = T.stack([s00, s01, s10, s11])
 S = S.transpose().reshape((nobs,2,2))
 
 #%%
@@ -623,7 +635,6 @@ if 'display' in purpose:
     gamma_mhat, gamma_mse, gamma_mt = get_stat(gamma_m, thetahat)
     gamma_emhat, gamma_emse, gamma_emt = get_stat(gamma_em, thetahat)
     
-    sigma_control_hat, sigma_control_se, sigma_control_t = get_stat(T.stack(sigma_10, var_zcontrol11), thetahat)
     #
     #i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int) # base alternative = 0
     #i2 = np.tile(np.arange(ngroup, dtype=int), nchoice-1)[1:] # groupid
@@ -687,7 +698,7 @@ if 'display' in purpose:
         
     print_result_group("variance of ethanol random utility (log)",
                        gamma_ehat, gamma_ese, gamma_et,
-                       Xsigmatreatlbls + Xsigmatreatlbls_extra)
+                       Xsigmatreatlbls_noconst + Xsigmatreatlbls_extra)
         
     print_result_group("variance of midgrade-g random utility (log)",
                        gamma_mhat, gamma_mse, gamma_mt,
@@ -696,10 +707,6 @@ if 'display' in purpose:
     print_result_group("corr of midgrade-g random utility (atanh)",
                        gamma_emhat, gamma_emse, gamma_emt,
                        Xsigmatreatlbls + Xsigmatreatlbls_extra)
-    
-    print_result_group("Control group covariance",
-                       sigma_control_hat, sigma_control_se, sigma_control_t,
-                       ["cov01", "var11"])
     
     print("Log-likelihood:", eval_f(thetahat))
     print(divider)
