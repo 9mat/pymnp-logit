@@ -7,7 +7,6 @@ import theano.tensor.slinalg
 import scipy
 import json
 import sys
-from solver import solve_unconstr
 
 #%%
 #specname = sys.argv[1]
@@ -103,6 +102,7 @@ df['car_lprice_normalized'] = df.car_lprice - df.car_lprice.mean()
 df['dv_carpriceadj_p0p75'] = 1 - df['dv_carpriceadj_p75p100']
 df['dv_usageveh_p0p75'] = 1 - df['dv_usageveh_p75p100']
 df['dv_nocollege'] = 1 - df['dv_somecollege']
+df['dv_atleast_secondary'] = df.dv_somecollege+df.dv_somesecondary
 
 df['p_ratio'] = df['pe_lt']/df['pg_lt']
 df['e_favor'] = df['p_ratio'] > 0.705
@@ -114,7 +114,11 @@ if 'dl_pedivpg' in df:
     df['neg_dl_pedivpg'] = np.maximum(0, -df.dl_pedivpg)
 
 if subsample is not None:
-    df = df.loc[df[subsample]==1,:]
+    if subsample.startswith("~"):
+        df = df.loc[df[subsample[1:]]==0,:]
+    else:
+        df = df.loc[df[subsample]==1,:]
+        
 print('Number of observations {}'.format(len(df)))
 
 # generate day of week dummies
@@ -503,6 +507,7 @@ def cal_marginal_effect_continuous(thetajat, varname, val):
 resultfile = spec['resultfile'] if 'resultfile' in spec else input('Path to result: ')
 
 if 'solve' in purpose:
+    from solver import solve_unconstr
     thetahat = solve_unconstr(theta0, eval_f, eval_grad, eval_hess)
     with open(resultfile, 'w') as outfile:
         json.dump({'thetahat':thetahat.tolist(), 'specfile': specfile}, outfile, indent=2)
