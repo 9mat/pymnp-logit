@@ -110,8 +110,13 @@ df['e_favor'] = df['p_ratio'] > 0.705
 
 if 'dl_pedivpg' in df:
     df['abs_dl_pedivpg'] = np.abs(df.dl_pedivpg)
+    df['abs_dl_pedivpg_sqr'] = np.abs(df.dl_pedivpg)**2
     df['pos_dl_pedivpg'] = np.maximum(0, df.dl_pedivpg)
     df['neg_dl_pedivpg'] = np.maximum(0, -df.dl_pedivpg)
+    df['abs_dl_pedivpg_1to2pc'] = (df.abs_dl_pedivpg > 0.01) & (df.abs_dl_pedivpg < 0.02)
+    df['abs_dl_pedivpg_gt_2pc'] = df.abs_dl_pedivpg > 0.02
+    df['abs_dl_pedivpg_1to15bp'] = (df.abs_dl_pedivpg > 0.001) & (df.abs_dl_pedivpg < 0.015)
+    df['abs_dl_pedivpg_gt_15bp'] = df.abs_dl_pedivpg >= 0.015
 
 if subsample is not None:
     if subsample.startswith("~"):
