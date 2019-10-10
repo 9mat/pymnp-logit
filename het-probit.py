@@ -454,8 +454,10 @@ def findiff(f, x):
 
 
 #%%
-eval_mean_pallbase = theano.function([theta], pallbase.mean(axis=1))
-eval_dmean_pallbase = theano.function([theta], T.jacobian(pallbase.mean(axis=1),[theta])[0])
+    
+if any(x in purpose for x in ['mfx', 'cf']): 
+    eval_mean_pallbase = theano.function([theta], pallbase.mean(axis=1))
+    eval_dmean_pallbase = theano.function([theta], T.jacobian(pallbase.mean(axis=1),[theta])[0])
 
 def cal_marginal_effect(thetahat, TX, X1, X2):
     X0 = TX.get_value()
@@ -594,13 +596,11 @@ if 'mfx' in purpose:
     for mfx in filter(lambda k: k.startswith("mfx_ct_"), spec):
         marginal_effects.update(cal_marginal_effect_continuous(thetahat, mfx[7:], spec[mfx]))
 
-    X1df = df.loc[:, pricelbls].copy()
-    X2df = X1df.copy()
-    X2df -= 0.01
-    X1 = X1df.values.astype(np.float64).transpose()
-    X2 = X2df.values.astype(np.float64).transpose()
-    ehat, ese = cal_marginal_effect(thetahat, Tprice, X1, X2)
-    marginal_effects['rel_lpg_km_adj'] = [ehat/0.01, ese/0.01]
+    df1 = df.loc[:, pricelbls].copy()
+    df2 = df1.copy()
+    df2 -= 0.01
+    ehat, ese = cal_marginal_effect(thetahat, df1, df2)
+    marginal_effects[pricelbls[1].replace('pgmidgrade', 'pg')] = [ehat/0.01, ese/0.01]
     
     marginal_effects_serialized = {}
     for k, v in marginal_effects.items():
