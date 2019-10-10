@@ -459,15 +459,31 @@ if any(x in purpose for x in ['mfx', 'cf']):
     eval_mean_pallbase = theano.function([theta], pallbase.mean(axis=1))
     eval_dmean_pallbase = theano.function([theta], T.jacobian(pallbase.mean(axis=1),[theta])[0])
 
-def cal_marginal_effect(thetahat, TX, X1, X2):
-    X0 = TX.get_value()
-    TX.set_value(X1)
-    share1 = eval_mean_pallbase(thetahat)
-    dshare1 = eval_dmean_pallbase(thetahat)
-    TX.set_value(X2)
-    share2 = eval_mean_pallbase(thetahat)
-    dshare2 = eval_dmean_pallbase(thetahat)
-    TX.set_value(X0)
+
+tensor_lbls_dict = {Tprice: pricelbls, TX: Xlbls, TXp: Xplbls, TXsigma: Xsigmatreatlbls,
+                    TXsigma_noconst: Xsigmatreatlbls_noconst, Tgroup_dummies: group_dummies.columns}
+
+df2tensor = lambda x: df[x].values.transpose().astype(floatX)
+
+def reset_values():
+    for tensor, lbls in tensor_lbls_dict.items():
+        tensor.set_value(df2tensor(lbls))        
+
+def set_values_cf(df_cf):
+    df_saved = df[df_cf.columns].copy()
+    df[df_cf.columns] = df_cf
+    reset_values()
+    df[df_cf.columns] = df_saved
+      
+def cal_share_cf(thetahat, df_cf):
+    set_values_cf(df_cf)
+    return eval_mean_pallbase(thetahat), eval_dmean_pallbase(thetahat)
+
+def cal_marginal_effect(thetahat, df1, df2):    
+    share1, dshare1 = cal_share_cf(thetahat, df1)
+    share2, dshare2 = cal_share_cf(thetahat, df2)
+    reset_values()
+    
     effecthat = share2 - share1
     deffect = dshare2 - dshare1
     coveffect = np.dot(np.dot(deffect, covhat), deffect.transpose())
@@ -475,31 +491,23 @@ def cal_marginal_effect(thetahat, TX, X1, X2):
     return [effecthat, effectse]
     
 def cal_marginal_effect_dummies(thetahat, dummyset):
-    X1df = df.loc[:, Xlbls].copy()
-    for d in dummyset: X1df[d] = 0.0
-    X1 = X1df.values.astype(np.float64).transpose()
+    df1 = df.loc[:, Xlbls].copy()
+    df1[dummyset] = 0.0
+    
     mfx = {}
     for d in dummyset:
-        X2df = X1df.copy()
-        X2df[d] = 1.0
-        X2 = X2df.values.astype(np.float64).transpose()
+        df2 = df1.copy()
+        df2[d] = 1.0
         print('mfx of ' + d)
-        mfx[d] = cal_marginal_effect(thetahat, TX, X1, X2)
+        mfx[d] = cal_marginal_effect(thetahat, df1, df2)
     return mfx
     
 def cal_marginal_effect_continuous(thetajat, varname, val):
     print('mfx of ' + varname)
-    if varname in Xlbls:
-        X1df = df.loc[:, Xlbls].copy()
-        tx = TX
-    else:
-        X1df = df.loc[:, pricelbls].copy()
-        tx = Tprice
-    X1 = X1df.values.astype(np.float64).transpose()
-    X2df = X1df.copy()
-    X2df[varname] += val
-    X2 = X2df.values.astype(np.float64).transpose()
-    mfx = cal_marginal_effect(thetahat, tx, X1, X2)
+    df1 = df[[varname]].copy()
+    df2 = df[[varname]].copy()
+    df2[varname] += val
+    mfx = cal_marginal_effect(thetahat, df1, df2)
     mfx[0] /= val
     mfx[1] /= val
     return {varname: mfx}
