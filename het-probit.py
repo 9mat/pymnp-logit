@@ -807,73 +807,92 @@ df_results_cf_long = pd.wide_to_long(df_results_cf, ['share_g', 'share_e', 'shar
 ndraws_cf = 50
 draws_cf = np.random.normal(size=(ndraws_cf, nobs,2))
 
-def binsearch(f, lb, ub, toler=1e-6):
+def binsearch(f,  target, lb, ub, toler=1e-6):
     mid = (lb+ub)/2.0
     while np.abs(lb-ub)>toler:
         mid = (lb+ub)/2.0
-        if np.abs(f(mid)) < toler:
+        gap = f(mid) - target
+        if np.abs(gap) < toler:
             return mid
-        if f(mid) < 0:
+        if gap < 0:
             lb = mid
         else:
             ub = mid
             
     return mid
 
-def binsearch_vector(f, lb, ub, toler=1e-6):
+def binsearch_vector(f, target, lb, ub, toler=1e-6):
+    iter = 0
     while True:
         mid = (lb+ub)/2.0
-        fmid = f(mid)
-        if np.abs(fmid).max() < toler or np.abs(ub-lb).max()<toler:
+        gap = f(mid) - target
+        iter += 1
+        print('Bin search iter {}, error = {}'.format(iter, np.abs(gap).max()))
+        if np.abs(gap).max() < toler or np.abs(ub-lb).max()<toler:
             return mid
-        lb[fmid<0] = mid[fmid<0]
-        ub[fmid>0] = mid[fmid>0]
+        lb[gap<0] = mid[gap<0]
+        ub[gap>0] = mid[gap>0]
     return mid
 
 
 #%%
-df_cf = df[pricelbls].copy()
-df_cf['treat_1'] = 1
-df_cf['treat_2'] = 0
-df_cf['const*treat_1'] = 1
-df_cf['const*treat_2'] = 0
+    
+eval_V = theano.function([theta], V)
+eval_S = theano.function([theta], S)
 
-pratio_range = np.arange(56,71)/100
-pe_discount_treat1 = []
-for pratio_cf in pratio_range:
-    print("Counterfactual: pe/pg = {}".format(pratio_cf))
-    pe_lt_cf = df.pg_lt*pratio_cf
-    pe_km_adj_cf = df.pe_km_adj/df.pe_lt*pe_lt_cf
-    #pe_km_adj_cf = df.pe_km_adj
+def mean_utility_cf(pe_km_adj_cf, treattype = 'control', choiceset = [0,1,2], axes = None):
+    df_cf = df[pricelbls].copy()
+    df_cf['treat_1'] = df_cf['const*treat_1'] = (treattype=='treat_1')*1
+    df_cf['treat_2'] = df_cf['const*treat_2'] = (treattype=='treat_2')*1
     
     df_cf['pe_km_adj'] = pe_km_adj_cf
     df_cf['rel_pe_km_adj'] = df_cf.pe_km_adj - df.pg_km_adj
     df_cf['rel_lpe_km_adj'] = np.log(df_cf.pe_km_adj) - np.log(df.pg_km_adj)
     
     set_values_cf(df_cf)
-    Vmean = theano.function([theta], V)(thetahat)
-    
-    Shat = theano.function([theta], S)(thetahat)
+    Vmean = eval_V(thetahat)
+    Shat = eval_S(thetahat)
     random_utility = np.einsum('ijk,rik->rji', Shat, draws_cf)
+    
     Vrandom = Vmean + random_utility
+    Vmax = Vrandom[:,[j-1 for j in choiceset],:].max(axis=1)
     
-    mean_utility = np.maximum(Vrandom.max(axis=1), 0).mean()
-    
-    def utility_gap(pe_discount):
-        df_cf['pe_km_adj'] = pe_km_adj_cf*pe_discount
-        df_cf['rel_pe_km_adj'] = df_cf.pe_km_adj - df.pg_km_adj
-        df_cf['rel_lpe_km_adj'] = np.log(df_cf.pe_km_adj) - np.log(df.pg_km_adj)
+    if 0 in choiceset:
+        Vmax = np.maximum(Vmax, 0)
         
-        set_values_cf(df_cf)
-        Vmean = theano.function([theta], V)(thetahat)
-        Vrandom = Vmean + random_utility
+    return Vmax.mean(axis=axes)
+   
     
-        mean_utility_no_g = Vrandom.max(axis=1).mean()
-        return mean_utility - mean_utility_no_g
+pratio_range = np.arange(55,71,5)/100
+pe_discount_df = pd.DataFrame()
+
+for pratio_cf in pratio_range:
+    print("Counterfactual: pe/pg = {}".format(pratio_cf))
+    pe_lt_cf = df.pg_lt*pratio_cf
+    pe_km_adj_cf = df.pe_km_adj/df.pe_lt*pe_lt_cf
+
+    mean_utility_control_fullchoiceset = mean_utility_cf(pe_km_adj_cf)
+    mean_utility_treat1_fullchoiceset = mean_utility_cf(pe_km_adj_cf, 'treat_1')
+    
+    choiceset = {'no_g':[1,2], 'no_fossil': [1], 'no_mg': [0,1]}
+    
+    for treattype in ['control', 'treat_1']:
+        mean_utility_fullchoiceset = mean_utility_cf(pe_km_adj_cf, treattype)
         
-    pe_discount_treat1.append(binsearch(utility_gap, 0, 1))
+        for choicesetcode in ['no_g', 'no_fossil', 'no_mg']:
+            mean_utility_newchoiceset = lambda discount: mean_utility_cf(pe_km_adj_cf*(1-discount), treattype, choiceset[choicesetcode])
+            pe_discount_solution = binsearch(mean_utility_newchoiceset, mean_utility_fullchoiceset, 0, 1)
+            
+            pe_discount_df = pe_discount_df.append({
+                    'pratio': pratio_cf,
+                    'treattype': treattype, 
+                    'choiceset': choicesetcode,
+                    'pe_discount': pe_discount_solution}, ignore_index=True)
+            
+    
     
 #%%
+   
 df_cf['treat_1'] = 0
 df_cf['treat_2'] = 0
 df_cf['const*treat_1'] = 0
@@ -909,7 +928,7 @@ for pratio_cf in pratio_range:
         Vmean = theano.function([theta], V)(thetahat)
         Vrandom = Vmean + random_utility
     
-        mean_utility_no_g = Vrandom.max(axis=1).mean()
+        mean_utility_no_g = Vrandom[:,0,:].mean()
         return mean_utility - mean_utility_no_g
         
     pe_discount_control.append(binsearch(utility_gap, 0, 1))
@@ -952,10 +971,14 @@ df_cf['pe_km_adj'] = pe_km_adj_cf
 df_cf['rel_pe_km_adj'] = df_cf.pe_km_adj - df.pg_km_adj
 df_cf['rel_lpe_km_adj'] = np.log(df_cf.pe_km_adj) - np.log(df.pg_km_adj)
 
+set_values_cf(df_cf)
+Vmean = theano.function([theta], V)(thetahat)
+
 Shat = theano.function([theta], S)(thetahat)
 random_utility = np.einsum('ijk,rik->rji', Shat, draws_cf)
+
 Vrandom = Vmean + random_utility
-mean_utility = np.maximum(Vrandom.max(axis=1), 0).mean()
+mean_utility = np.maximum(Vrandom.max(axis=1), 0).mean(axis=0)
 
 def utility_gap_vector(pe_discount):
     df_cf['pe_km_adj'] = pe_km_adj_cf*pe_discount
@@ -966,7 +989,7 @@ def utility_gap_vector(pe_discount):
     Vmean = theano.function([theta], V)(thetahat)
     Vrandom = Vmean + random_utility
 
-    mean_utility_no_g = Vrandom.max(axis=1)
+    mean_utility_no_g = Vrandom.max(axis=1).mean(axis=0)
     return mean_utility - mean_utility_no_g
 
 
