@@ -732,7 +732,8 @@ if 'display' in purpose:
 #    for y in Xsigmalbls:
 #        df[y+"*"+x] = df[x]*df[y]
 #        Xsigmatreatlbls.append(y+"*"+x)
-
+        
+#%%
 if 'cf' in purpose:
     group_dummies_cf = {x: group_dummies.copy() for x in ['control'] + group_dummies.columns}
     Xsigma_cf = {x: df[Xsigmatreatlbls].copy() for x in ['control'] + group_dummies.columns}
@@ -749,8 +750,224 @@ if 'cf' in purpose:
         TXsigma.set_value(Xsigma_cf[x_cf].values.transpose().astype(floatX))
         Tgroup_dummies.set_values(group_dummies_cf[x_cf].values.transpose().astype(floatX))
     
-    
+#%%    
 if 'se' in purpose:
     with open(resultfile, 'w') as outfile:
         json.dump({'thetahat':thetahat.tolist(), 'thetase': sehat.tolist(), 'specfile': specfile}, outfile, indent=2)
+
+#%%
+        
+pratio_range = np.arange(50,85)/100.0
+share_cf = []
+for pratio in pratio_range:
+    pe_lt_cf = df.pg_lt*pratio
+    pe_km_adj_cf = df.pe_km_adj/df.pe_lt*pe_lt_cf
+    price_cf = df[pricelbls].copy()
+    price_cf['rel_pe_km_adj'] = pe_km_adj_cf - df.pg_km_adj
+    Tprice.set_value(price_cf.values.transpose().astype(floatX))
     
+    group_dummies_cf = group_dummies.copy()
+    share_cf_i = []
+    for group_cf in ['control'] + group_dummies_cf.columns.tolist():
+        for group_dummy in group_dummies_cf.columns:
+            group_dummies_cf[group_dummy] = 1 if group_cf == group_dummy else 0
+    
+        df_cf = group_dummies_cf.copy()
+        df_cf[Xsigmalbls] = df[Xsigmalbls].copy()
+    
+        for x in group_dummies_cf.columns:
+            for y in Xsigmalbls:
+                df_cf[y+"*"+x] = df_cf[x]*df_cf[y]
+    
+        TXsigma.set_value(df_cf[Xsigmatreatlbls].values.transpose().astype(floatX))
+        TXsigmafull_noconst.set_value(df_cf[Xsigmatreatlbls_noconst].values.transpose().astype(floatX))
+        Tgroup_dummies.set_value(group_dummies_cf.values.transpose().astype(floatX))
+    
+        share_cf_i.append(eval_mean_pallbase(thetahat))
+    share_cf.append(np.array(share_cf_i))
+    
+# share_cf.shape = (cf, group, fuel) 
+share_cf = np.array(share_cf)
+
+df_results_cf = pd.DataFrame(data = {'pratio': pratio_range, 
+                                     'share_g_control': share_cf[:,0,0],
+                                     'share_g_treat1': share_cf[:,1,0],
+                                     'share_g_treat2': share_cf[:,2,0],
+                                     'share_e_control': share_cf[:,0,1],
+                                     'share_e_treat1': share_cf[:,1,1],
+                                     'share_e_treat2': share_cf[:,2,1],
+                                     'share_mg_control': share_cf[:,0,2],
+                                     'share_mg_treat1': share_cf[:,1,2],
+                                     'share_mg_treat2': share_cf[:,2,2]})
+
+df_results_cf['id'] = np.arange(df_results_cf.shape[0])    
+df_results_cf_long = pd.wide_to_long(df_results_cf, ['share_g', 'share_e', 'share_mg'], i='id', j='treattype', sep='_', suffix='\w+').reset_index()
+
+#%%
+ndraws_cf = 50
+draws_cf = np.random.normal(size=(ndraws_cf, nobs,2))
+
+def binsearch(f, lb, ub, toler=1e-6):
+    mid = (lb+ub)/2.0
+    while np.abs(lb-ub)>toler:
+        mid = (lb+ub)/2.0
+        if np.abs(f(mid)) < toler:
+            return mid
+        if f(mid) < 0:
+            lb = mid
+        else:
+            ub = mid
+            
+    return mid
+
+def binsearch_vector(f, lb, ub, toler=1e-6):
+    while True:
+        mid = (lb+ub)/2.0
+        fmid = f(mid)
+        if np.abs(fmid).max() < toler or np.abs(ub-lb).max()<toler:
+            return mid
+        lb[fmid<0] = mid[fmid<0]
+        ub[fmid>0] = mid[fmid>0]
+    return mid
+
+
+#%%
+df_cf = df[pricelbls].copy()
+df_cf['treat_1'] = 1
+df_cf['treat_2'] = 0
+df_cf['const*treat_1'] = 1
+df_cf['const*treat_2'] = 0
+
+pratio_range = np.arange(56,71)/100
+pe_discount_treat1 = []
+for pratio_cf in pratio_range:
+    print("Counterfactual: pe/pg = {}".format(pratio_cf))
+    pe_lt_cf = df.pg_lt*pratio_cf
+    pe_km_adj_cf = df.pe_km_adj/df.pe_lt*pe_lt_cf
+    #pe_km_adj_cf = df.pe_km_adj
+    
+    df_cf['pe_km_adj'] = pe_km_adj_cf
+    df_cf['rel_pe_km_adj'] = df_cf.pe_km_adj - df.pg_km_adj
+    df_cf['rel_lpe_km_adj'] = np.log(df_cf.pe_km_adj) - np.log(df.pg_km_adj)
+    
+    set_values_cf(df_cf)
+    Vmean = theano.function([theta], V)(thetahat)
+    
+    Shat = theano.function([theta], S)(thetahat)
+    random_utility = np.einsum('ijk,rik->rji', Shat, draws_cf)
+    Vrandom = Vmean + random_utility
+    
+    mean_utility = np.maximum(Vrandom.max(axis=1), 0).mean()
+    
+    def utility_gap(pe_discount):
+        df_cf['pe_km_adj'] = pe_km_adj_cf*pe_discount
+        df_cf['rel_pe_km_adj'] = df_cf.pe_km_adj - df.pg_km_adj
+        df_cf['rel_lpe_km_adj'] = np.log(df_cf.pe_km_adj) - np.log(df.pg_km_adj)
+        
+        set_values_cf(df_cf)
+        Vmean = theano.function([theta], V)(thetahat)
+        Vrandom = Vmean + random_utility
+    
+        mean_utility_no_g = Vrandom.max(axis=1).mean()
+        return mean_utility - mean_utility_no_g
+        
+    pe_discount_treat1.append(binsearch(utility_gap, 0, 1))
+    
+#%%
+df_cf['treat_1'] = 0
+df_cf['treat_2'] = 0
+df_cf['const*treat_1'] = 0
+df_cf['const*treat_2'] = 0
+
+pe_discount_control = []
+for pratio_cf in pratio_range:
+    print("Counterfactual: pe/pg = {}".format(pratio_cf))
+    pe_lt_cf = df.pg_lt*pratio_cf
+    pe_km_adj_cf = df.pe_km_adj/df.pe_lt*pe_lt_cf
+    #pe_km_adj_cf = df.pe_km_adj
+    
+    df_cf = df[pricelbls].copy()
+    df_cf['pe_km_adj'] = pe_km_adj_cf
+    df_cf['rel_pe_km_adj'] = df_cf.pe_km_adj - df.pg_km_adj
+    df_cf['rel_lpe_km_adj'] = np.log(df_cf.pe_km_adj) - np.log(df.pg_km_adj)
+    
+    set_values_cf(df_cf)
+    Vmean = theano.function([theta], V)(thetahat)
+    
+    Shat = theano.function([theta], S)(thetahat)
+    random_utility = np.einsum('ijk,rik->rji', Shat, draws_cf)
+    Vrandom = Vmean + random_utility
+    
+    mean_utility = np.maximum(Vrandom.max(axis=1), 0).mean()
+    
+    def utility_gap(pe_discount):
+        df_cf['pe_km_adj'] = pe_km_adj_cf*pe_discount
+        df_cf['rel_pe_km_adj'] = df_cf.pe_km_adj - df.pg_km_adj
+        df_cf['rel_lpe_km_adj'] = np.log(df_cf.pe_km_adj) - np.log(df.pg_km_adj)
+        
+        set_values_cf(df_cf)
+        Vmean = theano.function([theta], V)(thetahat)
+        Vrandom = Vmean + random_utility
+    
+        mean_utility_no_g = Vrandom.max(axis=1).mean()
+        return mean_utility - mean_utility_no_g
+        
+    pe_discount_control.append(binsearch(utility_gap, 0, 1))
+    
+pe_discount_treat1 = np.array(pe_discount_treat1)
+pe_discount_control = np.array(pe_discount_control)
+
+#%%
+pe_discount_df = pd.DataFrame({'pratio': pratio_range, 
+                               'pe_discount_treat1': 1-pe_discount_treat1,
+                               'pe_discount_control': 1-pe_discount_control})
+pe_discount_df['id'] = np.arange(pe_discount_df.shape[0])
+pe_discount_df_long = pd.wide_to_long(pe_discount_df, 'pe_discount', i='id', j='treattype', sep='_', suffix='\w+').reset_index()
+
+
+#%%
+from plotnine import *
+(ggplot(pe_discount_df_long) + 
+    aes(x='pratio', y='pe_discount', color='treattype', shape='treattype', linetype='treattype') + 
+    geom_line() + xlab('pe/pg') + ylab('Compensatd ethanol discount') +
+    scale_linetype_discrete(name = 'Treat type', labels = ['Control', 'Price-ratio flyer']) + 
+    guides(color=False)
+    )
+
+
+#%%
+
+
+df_cf = df[pricelbls].copy()
+df_cf['treat_1'] = 1
+df_cf['treat_2'] = 0
+df_cf['const*treat_1'] = 1
+df_cf['const*treat_2'] = 0
+
+pratio_cf = 0.7
+pe_lt_cf = df.pg_lt*pratio_cf
+pe_km_adj_cf = df.pe_km_adj/df.pe_lt*pe_lt_cf
+
+df_cf['pe_km_adj'] = pe_km_adj_cf
+df_cf['rel_pe_km_adj'] = df_cf.pe_km_adj - df.pg_km_adj
+df_cf['rel_lpe_km_adj'] = np.log(df_cf.pe_km_adj) - np.log(df.pg_km_adj)
+
+Shat = theano.function([theta], S)(thetahat)
+random_utility = np.einsum('ijk,rik->rji', Shat, draws_cf)
+Vrandom = Vmean + random_utility
+mean_utility = np.maximum(Vrandom.max(axis=1), 0).mean()
+
+def utility_gap_vector(pe_discount):
+    df_cf['pe_km_adj'] = pe_km_adj_cf*pe_discount
+    df_cf['rel_pe_km_adj'] = df_cf.pe_km_adj - df.pg_km_adj
+    df_cf['rel_lpe_km_adj'] = np.log(df_cf.pe_km_adj) - np.log(df.pg_km_adj)
+    
+    set_values_cf(df_cf)
+    Vmean = theano.function([theta], V)(thetahat)
+    Vrandom = Vmean + random_utility
+
+    mean_utility_no_g = Vrandom.max(axis=1)
+    return mean_utility - mean_utility_no_g
+
+
+pe_discount_vec = binsearch_vector(utility_gap_vector, np.zeros_like(mean_utility), np.ones_like(mean_utility))
