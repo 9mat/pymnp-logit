@@ -8,8 +8,8 @@ import json
 import numpy as np
 import sys
 
-specfolder = '../../spec'
-specfiles = ['spec{}.json'.format(i) for i in [1,2,3,4,7,8,9,10]]
+specfolder = '../../spec/absprice/run-20191008-10pm'
+specfiles = ['spec{}.json'.format(i) for i in ['1nofe',1,4,7]]
 
 Xlbls = []
 Xplbls = []
@@ -124,6 +124,7 @@ param_set_title ={'a': 'price sensitity',
                   'g_em': 'correlation between random utilities of two fuels (atanh)',}
 
 def sig_level(t):
+    t = np.abs(t)
     return 3 if t > 2.56 else 2 if t > 1.96 else 1 if t > 1.65 else 0
 
 def display_txt():
@@ -166,6 +167,23 @@ def display_csv():
             print(','.join([x] + eststrs))
             print(','.join([""] + sestrs))
 
+var_lbls = {
+    'dv_age_25to40y': 'Aged 25-40 years',
+    'dv_age_40to65y': 'Aged 40-65 years',
+    'dv_age_morethan65y': "Aged more than 65 years",
+    'dv_somesecondary': 'Secondary School',
+    'dv_somecollege': "College educated",
+    'car_lprice': 'Vehicle price (1000\\$, log)',
+    'treat_1': 'Price-ratio treatment',
+    'treat_2': 'km-per-R\\$50 treatment',
+    'dv_female': 'Female consumer',
+    'dv_usageveh_p75p100': 'Top-quartile vehicle usage',
+    'treat_1*const': 'Price-ratio treatment',
+    'treat_2*const': 'km-per-R\\$50 treatment',
+    'alpha_i*treat_1': 'Price-ratio treatment \\(\\times\\) (\\(\\alpha_i-\\alpha\\)',
+    'alpha_i*treat_2': 'km-per-R\\$50 treatment \\(\\times\\) (\\(\\alpha_i-\\alpha\\)',
+    'const': 'Constant'
+}
 
 def display_tex():
     n_cols = len(specfiles)
@@ -193,6 +211,38 @@ def display_tex():
     print("\\end{tabular}")    
     print("}")
     print("\\end{document}")
+
+
+def display_tex_wide():
+    n_cols = len(specfiles)
+    print("\\documentclass{article}")
+    print("\\usepackage{booktabs}")
+    print("\\usepackage{fullpage}")
+    print("\\begin{document}")
+    print("{\\footnotesize\\def\\sym#1{\\ifmmode^{#1}\\else\\(^{#1}\\)\\fi}")
+    print("\\begin{tabular}{l" + "lc"*n_cols + "}")
+    print("\\toprule")
+    print("&" + "&".join("\\multicolumn{{2}}{{c}}{{({})}}".format(i) for i in range(1, n_cols+1))+"\\\\")
+    print(" ".join("\\cmidrule(lr){{{}-{}}}".format(2*i,2*i+1) for i in range(1, n_cols+1)))
+    print("& Coef.  &   S.E.  "*n_cols + "\\\\")
+    print("\\midrule")
+    star_symbols = ["", "\\sym{*}", "\\sym{**}", "\\sym{***}"]
+    for param, x_list in estimates.items():
+        print("\\multicolumn{{{}}}{{l}}{{{}}}".format(n_cols*2+1, param_set_title[param]) + "\\\\")
+        for x, estimate_list in x_list.items():
+            ests, ses = list(zip(*estimate_list))
+            ts = np.abs(np.array(ests)/np.array(ses))
+            stars = [star_symbols[sig_level(t)] for t in ts]
+            eststrs =  [("\({:.2f}\)".format(est) + star) if not np.isnan(est) else "" for est, star in zip(ests, stars)]
+            sestrs = ["({:.2f})".format(se)  if not np.isnan(se) else "" for se in ses]
+            items = sum(map(list, zip(eststrs, sestrs)), [])
+            label = var_lbls[x] if x in var_lbls else x.replace('_', '\\textunderscore ')
+            print("  {:<30}&".format(label) + '&'.join(map("{:>16}".format, items)) + "\\\\")
+        print("\\midrule")
+    print("\\bottomrule")
+    print("\\end{tabular}")    
+    print("}")
+    print("\\end{document}")
     
-display_txt()
             
+display_tex_wide()
