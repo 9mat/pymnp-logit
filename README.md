@@ -1,8 +1,8 @@
 # Fixed-effect Heterogenous Multinomial Probit
-This project estimate a discrete-choice model with 3 alternatives: ethanol, regular gasoline, and midgrade gasoline.
+This project develops a discrete-choice model for 3 alternatives: ethanol, regular gasoline, and midgrade gasoline.
 The model accounts for (1) unobserved market factors with fuel-station fixed effects
 (2) correlation in random utility between fuels, and (3) possibility of inaccurate price perception.
-The model is estimate with a Heterogenous Multinomial Probit estimation with fuel-station fixed effects.
+The model is estimated by using maximum likelihood estimator with fuel-station fixed effects.
 
 I use [Theano](http://deeplearning.net/software/theano/) for automatic differetiation, and 
 [Ipopt](https://www.coin-or.org/Ipopt/documentation/) for non-linear optimization (maximum simulated likelihood)
