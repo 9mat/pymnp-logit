@@ -26,8 +26,8 @@ specfile = sys.argv[1] if len(sys.argv) > 1 else input("Path to spec: ")
 
 
 # purpose: 
-#     specify whether to solve for estiamtes, to calculate the marginal effects
-#     or to just display the results. purposed can be combined
+#     specify whether to solve for estimates, to calculate the marginal effects
+#     or to just display the results. purposes can be combined
 #     specify purposes in the second argument of the command, or when prompted      
 purpose = sys.argv[2] if len(sys.argv) > 2 else input("Purpose (solve/mfx/display): ")
 
@@ -83,92 +83,29 @@ all_Xlbls = Xlbls + Xplbls + Xsigmalbls
 if any(x in all_Xlbls for x in ['dl_pedivpg', 'abs_dl_pedivpg', 'pos_dl_pedivpg', 'neg_dl_pedivpg']):
     df = df[~pd.isna(df.dl_pedivpg)]
 
-# # old coding: 2 = midgrade gasoline, 3 = ethanol
-# # new coding: 2 = ethanol, 3 = midgrad gasoline
-# choice = df.choice.values
-# if 'recoding' in spec and spec['recoding']:
-#     df.loc[choice==3, 'choice']=2
-#     df.loc[choice==2, 'choice']=3
-
-# # drop RJ, drop midgrade ethanol and treatment 3 and 4
-# df = df[df.dv_rj==0]
-# df = df[df.choice < 4]
-# df = df.loc[df.treattype < 3]
-
-
-# df['const'] = 1
-
-# # impute missing prices
-# df['pgmidgrade_km_adj'].fillna(value=1e3, inplace=True)
-# df['pemidgrade_km_adj'].fillna(value=1e3, inplace=True)
-
-# # relative prices
-# df['rel_lpgmidgrade_km_adj'] = np.log(df.pgmidgrade_km_adj) - np.log(df.pg_km_adj)
-# df['rel_lpe_km_adj'] = np.log(df.pe_km_adj) - np.log(df.pg_km_adj)
-
-# df['rel_pgmidgrade_km_adj'] = (df.pgmidgrade_km_adj) - (df.pg_km_adj)
-# df['rel_pe_km_adj'] = (df.pe_km_adj) - (df.pg_km_adj)
-
-# df['ltank'] = np.log(df.car_tank)
-
-# # car brand dummies
-# df['gm']   = df.car_make == "GM"
-# df['vw']   = df.car_make == "VW"
-# df['fiat'] = df.car_make == "FIAT"
-# df['ford'] = df.car_make == "FORD"
-
-# # car class
-# df['dv_carclass_compact'] = df.car_class == "Compact"
-# df['dv_carclass_fullsize'] = df.car_class == "Fullsize"
-# df['dv_carclass_midsize'] = df.car_class == "Midsize"
-# df['dv_carclass_minivan'] = df.car_class == "Minivan"
-# df['dv_carclass_suv'] = df.car_class == "SUV"
-# df['dv_carclass_smalltruck'] = df.car_class == "Smalltruck"
-# df['dv_carclass_subcompact'] = df.car_class == "Subcompact"
-
-# df['car_age'] = 2012 - df.car_model_year
-# df['car_lprice'] = np.log(df.car_price_adj)
-# df['car_lprice_normalized'] = df.car_lprice - df.car_lprice.mean()
-
-# df['dv_carpriceadj_p0p75'] = 1 - df['dv_carpriceadj_p75p100']
-# df['dv_usageveh_p0p75'] = 1 - df['dv_usageveh_p75p100']
-# df['dv_nocollege'] = 1 - df['dv_somecollege']
-# df['dv_atleast_secondary'] = df.dv_somecollege+df.dv_somesecondary
-
-# df['p_ratio'] = df['pe_lt']/df['pg_lt']
-# df['e_favor'] = df['p_ratio'] > 0.705
- 
-
-# if 'dl_pedivpg' in df:
-#     df['abs_dl_pedivpg'] = np.abs(df.dl_pedivpg)
-#     df['pos_dl_pedivpg'] = np.maximum(0, df.dl_pedivpg)
-#     df['neg_dl_pedivpg'] = np.maximum(0, -df.dl_pedivpg)
-
 # if `subsample` is not None, use only the corresponding subsample
 # if `subsample` starts with `~`, use the complement subsample instead
-# e.g. subsample = dv_somecollege to use college graduates
-# while subsample = ~dv_somecoollege to use non-college
+# e.g. subsample = dv_somecollege to use only college graduates
+#      subsample = ~dv_somecollege to use motorists with no college degree
 if subsample is not None:
-    if subsample.startswith("~"):
-        df = df.loc[df[subsample[1:]]==0,:]
-    else:
-        df = df.loc[df[subsample]==1,:]
+    df = df[df[subsample] == (not subsample.startswith("~"))]
         
-print('Number of observations {}'.format(len(df)))
+# print('Number of observations {}'.format(len(df)))
 
 # generate day of week dummies
 dow_dummies = pd.get_dummies(df['date'].dt.dayofweek, prefix='dv_dow')
 df[dow_dummies.columns[1:]] = dow_dummies[dow_dummies.columns[1:]]
 
-group_dummies = pd.get_dummies(df[grouplbls], prefix='treat', drop_first=True)
-df[group_dummies.columns] = group_dummies
+treat_dummies = pd.get_dummies(df.treattype, prefix='treat', drop_first=True)
+treatlbls = treat_dummies.columns
+df[treatlbls] = treat_dummies
 
 
 # covariates that shift the covariance matrix
 # the covariates include variables specified in Xsigmalbls
 # and their interactions with the treatement dummies
 Xsigmatreatlbls = Xsigmalbls[:]
-for x in group_dummies.columns:
+for x in treatlbls:
     for y in Xsigmalbls:
         # interaction between Xsigma and treatment
         df[y+"*"+x] = df[x]*df[y] 
@@ -182,32 +119,22 @@ Xsigmatreatlbls_noconst = [x for x in Xsigmatreatlbls if x != 'const']
 #%% UNPACK DATA, PREPARE PARAMETERS
 
 
-# unpack the data from the dataframe to individual vectors/matrices
-# for ease of implementation
-choice  = df['choice'].values
-price   = df.loc[:, pricelbls].values.transpose()
-X       = df.loc[:, Xlbls].values.transpose()
-Xp      = df.loc[:, Xplbls].values.transpose()
-Xsigma  = df.loc[:, Xsigmalbls].values.transpose()
-groupid = df.loc[:, grouplbls].values.transpose()
-
 # number of covariates in the mean utility and the price sensitivity equation
 # and the number of alternatives
-nX, nXp, nchoice  = len(Xlbls), len(Xplbls), len(pricelbls) + 1
+nX, nXp, J  = len(Xlbls), len(Xplbls), len(pricelbls) + 1
 
 # number of parameters to be estimated
-# note: the covariance matrix sigma is (nchoice-1) by (nchoice-1) matrix
+# note: the covariance matrix sigma is (J-1) by (J-1) matrix
 # the first variance is not identified
-# thus, we have (nchoice-1)*nchoice//2 - 1 identified parameters in the matrix
+# thus, we have (J-1)*J//2 - 1 identified parameters in the matrix
 nalpha  = nXp
-nbeta   = nX*(nchoice-1)
-nsigma  = (nchoice-1)*nchoice//2 - 1
+nbeta   = nX*(J-1)
+nsigma  = (J-1)*J//2 - 1
 
-nobs    = df.shape[0]
-ngroup  = np.unique(groupid).size
+N       = len(df)
+ngroup  = df.treattype.unique().size
 
-
-# indicates whether to allow the price sensitivity to be heterogenous
+# indicates whether to allow the price sensitivity to shift with demographics
 use_dprice = nalpha > 1
 
 
@@ -215,26 +142,44 @@ ngamma = len(Xsigmalbls) + use_price_sensitity_in_sigma
 ngamma_e = ngamma_m = ngamma_em = ngamma*(ngroup-1) + ngamma - use_price_sensitity_in_sigma
 ngamma_e -= ('const' in Xsigmalbls)
  
+# number of stations (= number of unique station id)
+M = df.stationid.unique().size
 
-stationidold = df['stationid'].astype(int).values
-uniquestationid = np.unique(stationidold)
-nstation = uniquestationid.shape[0]
+# recode the station id so that it is in consecutive order from 0 to (M-1)
+df.stationid = df.stationid.astype('category').cat.rename_categories(range(M))
+stationid = df.stationid.values
 
-stationid = np.zeros(stationidold.shape, dtype=int)
-for i in range(nstation):
-    stationid[stationidold==uniquestationid[i]] = i
-    
-dv_choice = np.arange(nchoice).reshape((nchoice,1)) == (choice-1)
-nobsstation = np.array([(stationid==sid).sum() for sid in range(nstation)])
+choice  = df.choice.values
 
+# dummies for fuel choices
+dv_choice = pd.get_dummies(choice).values.transpose()
 
+#%%
 if use_fe:
-    sumchoice_station = np.array([dv_choice[1:, stationid == i].sum(axis = 1) for i in range(nstation)]).transpose()
-    nuisancexi = sumchoice_station == 0
-    nxi = (1-nuisancexi).sum()
+    # If an alternative is never chosen at a station, the corresponding xi
+    # is not identified. We need to count and mark the number of 
+    # the xi's that can be identified
     
-    xi_idx = np.zeros(nuisancexi.shape, dtype = int) + nxi
-    xi_idx[~nuisancexi] = np.arange(nxi)
+    # count the frequency of each choice by station
+    choicestation_count = np.zeros((J, M))
+    for j, sid in zip(choice, stationid):
+        choicestation_count[j-1, sid] += 1
+
+    
+    # Note that, with `J` alternatives, there are `J-1` xi's in
+    # each station (the xi of the base alternative is set to 0)
+    # Create boolean matrix of size (J-1, M) to mark if the xi's
+    # is identified or not <=> the alternative is ever chosen or not
+    xi_identified = choicestation_count[1:] > 0
+    
+    # the number of xi's that can be identified
+    nxi = xi_identified.sum()
+    
+    # Index the identified xi's from 0 to (nxi-1) and index all the other
+    # non-identified xi's by nxi
+    xi_idx = np.zeros(xi_identified.shape, dtype = int)
+    xi_idx[xi_identified] = np.arange(nxi)
+    xi_idx[~xi_identified] = nxi
 else:
     nxi = 0
     
@@ -243,57 +188,28 @@ theta0 = np.zeros((nalpha + nbeta + ngamma_e + ngamma_m + ngamma_em + 2 + nxi,))
 if 'rel_pe_km_adj' in pricelbls:
     theta0[0] = -30
 
-#%%
-
-# indices to help pick out the elements in the S matrix to be estimated
-# aka the all the elements in the lower triangle, except the first element,
-# which is set to 1 to normalized the scale of the utilit
-
-# There will be ngroup matrices of size (nchoice-1, nchoice-1)
-# There will be nallsigma parameters to be estimated for these matrices
-# The rest will be zero (the upper triangle except diagonal) or 1 (the first 
-# element for first group)
-# I map all the zero-elements to index (nallsigma+1), the one-element to
-# index-zero, and the rest to index from 1 to nallsigma
-
-# initialized with all (nallsigma+1) indices
-#tril_index_matrix = np.zeros((ngroup+1, nchoice-1, nchoice-1), dtype=int) + nallsigma + 1
-
-# list of tuples (g,j,k) -- g group, and j,k index of the lower triangles
-#tril_index = tuple(np.vstack((np.repeat(np.arange(ngroup+1), nsigma+1), 
-#              np.tile(np.tril_indices(nchoice-1), ngroup+1))).tolist())
-
-# set the indices of the lower triangles
-# for 3 groups, 3 choices, this matrix will be
-#[[[0, 9],
-#  [1, 2]],
-# [[3, 9],
-#  [4, 5]],
-# [[6, 9],
-#  [7, 8]]])
-#tril_index_matrix[tril_index] = np.arange(nallsigma+1)
-
 np.random.seed(1234)
 
 #%% DEFINE THEANO DATA TO REPRESENT PARAMETERS, DATA, AND LIKELHOOD
-
 # use double precision in all calculation
 floatX = 'float64'
 
-# vector of paremeters to be estimated
+# the vector of paremeters to be estimated
 theta  = T.dvector('theta')
 
 # unpack parameters
-#   alpha: price sensisivity paramater ()
-#   beta: choice-specific coefficients
-#   sraw: parameters to construct the covariance matrix
+#   alpha: price sensisivity paramater
+#   beta: choice-specific coefficients of the mean utility equation
+#   gamma_e: coefficients in the ethanol-variance equation
+#   gamma_m: coefficients in the mgasoline-variance equation
+#   gamma_em: coefficients in the correlation equation
 #   xiraw: fuel-station fixed effects that can be identified
 
 offset = 0
 alpha  = theta[offset: offset + nalpha]
 
 offset += nalpha
-beta   = theta[offset: offset + nbeta].reshape((nchoice-1, nX))
+beta   = theta[offset: offset + nbeta].reshape((J-1, nX))
 
 offset += nbeta
 gamma_e = theta[offset: offset + ngamma_e]
@@ -309,112 +225,161 @@ xiraw = theta[offset:offset+nxi] if use_fe else 0
 
 # fuel-station fixed effects
 if use_fe:
+    # Impute all the unidentified xi's by -10000
+    # append this number to the end of the xiraw vector
+    # so that this value maps to the index nxi of the vector 
     xiraw_padded = T.concatenate([xiraw, [-10000.]])
+    
+    # map the vector of raw xi's to the correspoinding station and choice
+    # using the index matrix xi_idx, create a matrix of (J-1, M)
+    # values of xi
     xi = xiraw_padded[xi_idx]
+    
+    # find the xi corresponding to all individuals by looking up the stationid
+    # that they are in, xi_i is a matrix of size (J-1, N)
     xi_i = xi[:, stationid]
 else:
     xi_i = 0
 
 # To be used in the GHK simulator:
-# transformation matrix M will change the base alternative to another base
-# M consists of `nchoice` matrices of size `(nchoice-1, nchoice-1)`
+# Matrix M is used to transform the vector of mean utility from the current
+# the base alternative (gasoline, choice 0) to another base alternative.
+# M consists of `J` matrices of size `(J-1, J-1)`
 # Suppose V is the mean utility using choice 0 as the base alternative 
-# M_j*V will be the mean utility if using choice j as the base alternative
-M = np.stack([[[1,0],[0,1]], [[-1,0],[-1,1]], [[0,-1],[1,-1]]])
+# M_j*V will be the mean utility using choice j as the base alternative
+M = np.stack([[[1,0],
+               [0,1]],  # base 0 to base 0 aka identity matrix
+              [[-1,0],
+               [-1,1]], # base 0 to base 1
+              [[0,-1],
+               [1,-1]]]) # base 0 to base 2
 
-# For each motorist, transform the mean utity using base-zero to the mean 
-# utility using the chosen choice as the base
-# Mi will be N matrices of size (nchoice-1, nchoice-1), each matrix for
-# each motorist
+# For each motorist, transform the mean utity using gasoline (choice 0) as the 
+# base alternative to the mean utility using the chosen fuel as the base.
+# Mi will be a set of N matrices of size (J-1, J-1),
+# so that Mi[i]*V[i] will be the  i-th motorist's mean utility using his/her
+# chosen fuel as the base alternative.
 Mi = M[choice-1, :, :]
+
+def df2tensor(x, name):
+    return theano.shared(df[x].values.transpose().astype(floatX), name=name)
+
+# unpack the data from the dataframe to individual vectors/matrices
+# for ease of implementation
+price   = df[pricelbls].values.transpose()
+X       = df[Xlbls].values.transpose()
+Xp      = df[Xplbls].values.transpose()
+Xsigma  = df[Xsigmalbls].values.transpose()
+groupid = df[grouplbls].values.transpose()
 
 
 # convert the data to theano data
-Tprice  = theano.shared(price.astype(floatX),  name='price')
-TX      = theano.shared(X.astype(floatX),  name='X')
-TXp     = theano.shared(Xp.astype(floatX), name='Xp')
+price   = df2tensor(pricelbls, 'price')
+X       = df2tensor(Xlbls, 'X')
+Xp      = df2tensor(Xplbls, 'Xp')
 
 
-# mean utility equation
+# mean utility equation, using gasoline as the base alternative
 # V_ijt = alpha_i*p_jt + beta_j*X_ijt + xi_jt
-alpha_i = T.dot(alpha, TXp)
-V = alpha_i*Tprice + T.dot(beta,TX)  + xi_i
+alpha_i = T.dot(alpha, Xp)
+V = alpha_i*price + T.dot(beta, X)  + xi_i
 
-# For GHK simulator, we need to use the chosen choice as the base alternative
-# for each individual, and subtract it from other non-choice 
-# The transformation matrix M is used to carry out the subtraction
+# mean utility, using each motorist's chosen fuel as the base alternative
+# this is to be used for the GHK simulator
 Vnonchoice = T.batched_dot(Mi,V.transpose()).transpose()  
 
 
+
+# In principle, with the imputation of missing prices (10000) and unidentified
+# xi's (-10000) the likelihood can be calculated as normal.
+# This sometimes however creates extreme large values and can make some
+# computation (e.g. taking exponential) unstable (in numpy, exp(-1000) = 0 and exp(1000) = inf)
+# In such situation, we need to pick out and discard the log likelihood
+# corresponding to those prices and xi's (which should be zero anyway)
+# The boolean vector `mask` of size (J-1, N) is to pick out the
+# indidual likelihood that do not correpsond to those prices and xi's
 if use_fe:
-    # Due to the base-alternative transformation, we need to recalculate
-    # the set of station-fuel FEs that cannot be identified
     # Assuming the first choice (gasoline) is always identified
-    # Applying the same transformation M to the set of dummies for identification
-    # will give use the new set of dummies for identification
-    mask = np.einsum('ijk,ki->ji', Mi, nuisancexi[:,stationid]) == 0
+    # Applying the same transformation M to the set of dummies for identified xi's
+    # will give use the new set of dummies for non-zero likelihood
+    mask = np.einsum('ijk,ki->ji', Mi, ~xi_identified[:,stationid]) == 0
 else:
     # Even without fixed effects, we still have some stations with missing 
-    # fuel, and the prices are imputed with a very high prices
-    # The log likelihood of those will be zero, so either including then or not
-    # will not affect identification
-    # However, due to extreme values, these calculation can be unstable
+    # fuel, and the prices are imputed with a very high value
+    # The log likelihood of those will be zero, so including them or not
+    # will not affect total log likelihood
+    # However, due to extreme values, the calculations can become unstable
     # so, if possible, we exclude these observations (where the price of a fuel 
     # is missing)
-    mask = np.abs(np.einsum('ijk,ki->ji', Mi, price)) < 10
+    mask = np.abs(np.einsum('ijk,ki->ji', Mi, df[pricelbls].values.transpose())) < 10
 
 #%%
-#esigma_11 = T.exp(sigma_11)
-#var_zcontrol11 = sigma_10**2 + esigma_11**2
     
-
 # covariates in the covariance equation
-TXsigma = theano.shared(df[Xsigmatreatlbls].values.transpose().astype(floatX))
+Xsigma = df2tensor(Xsigmatreatlbls, 'Xsigma')
 
-# covariates in the covariance equation, exclduing const
-TXsigma_noconst = theano.shared(df[Xsigmatreatlbls_noconst].values.transpose().astype(floatX))
+# covariates in the covariance equation, excluding the const
+Xsigma_noconst = df2tensor(Xsigmatreatlbls_noconst, 'Xsigma_noconst')
 
 # group dummies
-Tgroup_dummies = theano.shared(group_dummies.values.transpose().astype(floatX))
+treat_dummies = df2tensor(treatlbls, 'treat')
 
-# add the price sensitivity of allowing price sentivity to shift the covariance matrix
-TXsigmafull = TXsigma
-TXsigmafull_noconst = TXsigma_noconst
+# add the price sensitivity to Xsigma if allowing price sentivity to shift 
+# the covariance matrix
 if use_price_sensitity_in_sigma:
-    TXsigmafull = T.concatenate([TXsigmafull, (alpha_i-alpha_i.mean())*Tgroup_dummies])
-    TXsigmafull_noconst = T.concatenate([TXsigma_noconst, (alpha_i-alpha_i.mean())*Tgroup_dummies])
+    alpha_treat = (alpha_i-alpha_i.mean())*treat_dummies
+    Xsigmafull = T.concatenate([Xsigma, alpha_treat])
+    Xsigmafull_noconst = T.concatenate([Xsigma_noconst, alpha_treat])
+else:
+    Xsigmafull = Xsigma
+    Xsigmafull_noconst = Xsigma_noconst
+    
     
 
-var_z00 = T.exp(gamma_e.dot(TXsigmafull_noconst))
-var_z11 = T.exp(gamma_m.dot(TXsigmafull))
-cov_z10 = T.tanh(gamma_em.dot(TXsigmafull))*T.sqrt(var_z00*var_z11)
+var_z00 = T.exp(gamma_e.dot(Xsigmafull_noconst))
+var_z11 = T.exp(gamma_m.dot(Xsigmafull))
+cov_z10 = T.tanh(gamma_em.dot(Xsigmafull))*T.sqrt(var_z00*var_z11)
 
 # note that the above covariance matrix correponds to mean utiltity relative
-# to the first alternative
+# to the first alternative (gasoline)
 
 #%%
 
 
 # Cholesky decomposition for 2x2 matrix
+# see https://algowiki-project.org/en/Cholesky_method
 # V = [v00 v01, v10 v11], S = [s00 0, s10 s11], S'S = V
 # then s00 = sqrt(v00), s10 = v10/s00, s11 = sqrt(v11 - s10^2)
+# each of the following is a vector of the length N
 s00 = T.sqrt(var_z00)
 s10 = cov_z10/s00
 s11 = T.sqrt(var_z11 - s10**2)
-s01 = T.zeros((nobs,))
+s01 = T.zeros((N,))
 
-S = T.stack([s00, s01, s10, s11])
-S = S.transpose().reshape((nobs,2,2))
+S = (T.stack([s00, s01, s10, s11]) # size (4, N)
+     .transpose() # size (N, 4)
+     .reshape((N,2,2))) # size (N, 2, 2)
 
 #%%
 
 # Calculat the covariance matirx of the mean utility relative to each motorist
 # chosen alternative
 
-MS = T.batched_dot(Mi, S)
+# Transformed Cholesky matrices
+MS = T.batched_dot(Mi, S)   # MS_i = Mi_i*S_i
+                            # Mi is (N, 2, 2), S is (N, 2, 2)
+                            # batched_dot: matrices multiplication in batches 
+                            #              along the first dimension
+
+
+# Calculate the transformed variance matrices for each motorist i:
+# Sigma_i = (M_i*S_i)'*(M_i*S_i) = MS_i'*MS_i
+# MS is (N, 2, 2) or MS.dimshuffle((0,2,1)) is (N, 2, 2) but transpose 
+# the second and third dimension
 Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1)))
 
 # Cholesky decomposition (see the note above)
+# These vectors will be used in the GHK simulator
 c00 = T.sqrt(Sigma[:,0,0])
 c10 = Sigma[:,1,0]/c00
 c11 = T.sqrt(Sigma[:,1,1] - c10**2)
@@ -425,9 +390,12 @@ normcdf = lambda x: 0.5 + 0.5*T.erf(x/np.sqrt(2))
 norminv = lambda p: np.sqrt(2)*T.erfinv(2*p-1)
 
 ndraws = spec['ndraw'] if 'ndraw' in spec else 100
-#draws = np.random.random((ndraws,nobs))
 
-draws = (np.tile(np.arange(ndraws), (nobs,1)).transpose() + 0.5)/ndraws
+# random draws
+#draws = np.random.random((ndraws,N)) 
+
+# hammersley draws
+draws = (np.tile(np.arange(ndraws), (N,1)).transpose() + 0.5)/ndraws 
 
 # GHK simulator for 3 choices
 prob0 = normcdf(-Vnonchoice[0,:]/c00)
@@ -440,7 +408,7 @@ nlogl = -T.log(prob0).sum() - T.log(prob1[mask[1]]).sum()
 # theano function to calculate the log likelihood
 eval_f = theano.function([theta], outputs = nlogl)
 
-# automatic firs and second derivatives
+# automatic first and second derivatives
 grad = theano.function([theta], outputs = T.grad(nlogl, [theta]))
 hess = theano.function([theta], outputs = theano.gradient.hessian(nlogl, [theta]))
 
@@ -453,15 +421,15 @@ eval_hess = lambda t: np.squeeze(hess(t))
 
 #%% 
 
-dv_control = groupid==0
-nlog_control = nlogl_i[dv_control].sum()
+# dv_control = df.treattype.values == 0
+# nlog_control = nlogl_i[dv_control].sum()
 
-eval_f_control = theano.function([theta], outputs = nlog_control)
-grad_control = theano.function([theta], outputs = T.grad(nlog_control, [theta]))
-hess_control = theano.function([theta], outputs = theano.gradient.hessian(nlog_control, [theta]))
+# eval_f_control = theano.function([theta], outputs = nlog_control)
+# grad_control = theano.function([theta], outputs = T.grad(nlog_control, [theta]))
+# hess_control = theano.function([theta], outputs = theano.gradient.hessian(nlog_control, [theta]))
 
-eval_grad_control = lambda t: np.squeeze(grad_control(t))
-eval_hess_control = lambda t: np.squeeze(hess_control(t))
+# eval_grad_control = lambda t: np.squeeze(grad_control(t))
+# eval_hess_control = lambda t: np.squeeze(hess_control(t))
 
 #theta0 = solve_unconstr(theta0, eval_f_control, eval_grad_control, eval_hess_control)
 #print(theta0)
@@ -483,23 +451,23 @@ eval_hess_control = lambda t: np.squeeze(hess_control(t))
     
 #%%
 
-# mean utility, using each of the alternative as base
+# mean utility, using each of the alternatives as base
 # i.e. Vallabse is a N*J*(J-1) matrix: Vallbase(ijk) =  V(ij) - V(ik)
 Vallbase        = T.dot(M, V)
 
 # GHK simulator to approximate the likelihood
 p0allbase       = T.maximum(normcdf(-Vallbase[:,0,:]/c00), 1e-8)
-#drawsallbase    = np.random.random((ndraws,nchoice,nobs)) # uniform random draws
-drawsallbase    =  (np.tile(np.arange(ndraws), (nobs,nchoice,1)).transpose() + 0.5)/ndraws # hammersley draws
+#drawsallbase    = np.random.random((ndraws,J,N)) # uniform random draws
+drawsallbase    =  (np.tile(np.arange(ndraws), (N,J,1)).transpose() + 0.5)/ndraws # hammersley draws
 draws1allbase   = norminv(drawsallbase*p0allbase)
-p1allbase    = normcdf(-(Vallbase[:,1,:] + c10*draws1allbase)/c11).mean(axis=0)
+p1allbase       = normcdf(-(Vallbase[:,1,:] + c10*draws1allbase)/c11).mean(axis=0)
 
 # probability of choosing each of the alternative
 pallbase = p0allbase*p1allbase
 #
 #if use_fe and use_share_moments:    
-#    pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(nstation)]).transpose().flatten()[(~nuisancexi).flatten().nonzero()[0]]
-#    pstationtrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(nstation)]).transpose().flatten()[~nuisancexi.flatten()]
+#    pstation = T.stack([pallbase[1:,np.where(stationid==i)[0]].mean(axis=1) for i in range(M)]).transpose().flatten()[(xi_identified).flatten().nonzero()[0]]
+#    pstationtrue = np.stack([dv_choice[1:,stationid==i].mean(axis=1) for i in range(M)]).transpose().flatten()[xi_identified.flatten()]
 #                   
 #    obj_multiplier = T.dscalar('obj_multiplier')
 #    lagrange_multiplier = T.dvector('lagrange_multiplier')
@@ -511,11 +479,11 @@ pallbase = p0allbase*p1allbase
 #                                  outputs=theano.gradient.hessian(lagrange, [theta]))
 #    
 #    ntheta1 = nalpha + nbeta + nallsigma
-#    nxifull = (nchoice-1)*nstation
+#    nxifull = (J-1)*M
 #    mask00 = np.ones((ntheta1, ntheta1), dtype = bool)
 #    mask01 = np.ones((ntheta1, nxi), dtype = bool)
 #    mask10 = np.ones((nxi, ntheta1), dtype = bool)
-#    mask11 = np.tile(np.eye(nstation, dtype = bool), (nchoice-1, nchoice-1))[~nuisancexi.flatten(),:][:,~nuisancexi.flatten()]
+#    mask11 = np.tile(np.eye(M, dtype = bool), (J-1, J-1))[xi_identified.flatten(),:][:,xi_identified.flatten()]
 #    
 #    maskj = np.hstack((mask10, mask11))
 #    maskh = np.hstack((np.vstack((mask00, mask10)), np.vstack((mask01, mask11))))
@@ -558,6 +526,43 @@ def findiff(f, x):
         df.append(np.array(f(x2)-f(x1)).flatten()/(2*dx[i]))
         
     return np.stack(df)
+#%%
+
+resultfile = spec['resultfile'] if 'resultfile' in spec else input('Path to result: ')
+
+if 'solve' in purpose:
+    from solver import solve_unconstr
+    thetahat = solve_unconstr(theta0, eval_f, eval_grad, eval_hess)
+    with open(resultfile, 'w') as outfile:
+        json.dump({'thetahat':thetahat.tolist(), 'specfile': specfile}, outfile, indent=2)
+
+with open(resultfile, 'r') as outfile:
+	results = json.load(outfile)
+	
+thetahat = np.array(results['thetahat'])
+
+#%%
+
+if any(p in purpose for p in ['se', 'mfx', 'display', 'cf']):
+    print("Calculating clustered standard errors")
+    jacobian = theano.gradient.jacobian(nlogl_i, theta)
+    eval_jab = theano.function([theta], jacobian)
+    
+    
+    Jhat = eval_jab(thetahat)
+    covhat = np.linalg.pinv(eval_hess(thetahat))
+    
+    GG = Jhat.transpose().dot(Jhat)
+    GGclustered = np.zeros_like(GG)
+    for stid in df.stationid.unique():
+        Jsubhat = Jhat[(df.stationid==stid).nonzero()].sum(axis=0)
+        GGclustered += np.outer(Jsubhat, Jsubhat)
+    
+    covhatclustered = np.matmul(covhat, np.matmul(GGclustered, covhat))
+    
+    covhat = covhatclustered
+    sehat = np.sqrt(np.diag(covhat))
+    tstat = thetahat/sehat
 
 
 #%%
@@ -567,14 +572,16 @@ if any(x in purpose for x in ['mfx', 'cf']):
     eval_dmean_pallbase = theano.function([theta], T.jacobian(pallbase.mean(axis=1),[theta])[0])
 
 
-tensor_lbls_dict = {Tprice: pricelbls, TX: Xlbls, TXp: Xplbls, TXsigma: Xsigmatreatlbls,
-                    TXsigma_noconst: Xsigmatreatlbls_noconst, Tgroup_dummies: group_dummies.columns}
+tensor_lbls_dict = {price: pricelbls, X: Xlbls, Xp: Xplbls, Xsigma: Xsigmatreatlbls,
+                    Xsigma_noconst: Xsigmatreatlbls_noconst, treat_dummies: treatlbls}
 
-df2tensor = lambda x: df[x].values.transpose().astype(floatX)
+def df2tensor2(x):
+    return df[x].values.transpose().astype(floatX)
+
 
 def reset_values():
     for tensor, lbls in tensor_lbls_dict.items():
-        tensor.set_value(df2tensor(lbls))        
+        tensor.set_value(df2tensor2(lbls))        
 
 def set_values_cf(df_cf):
     df_saved = df[df_cf.columns].copy()
@@ -650,20 +657,6 @@ def cal_marginal_effect_continuous(thetahat, varname, val):
     mfx[1] /= val
     return {varname: mfx}
 
-#%%
-
-resultfile = spec['resultfile'] if 'resultfile' in spec else input('Path to result: ')
-
-if 'solve' in purpose:
-    from solver import solve_unconstr
-    thetahat = solve_unconstr(theta0, eval_f, eval_grad, eval_hess)
-    with open(resultfile, 'w') as outfile:
-        json.dump({'thetahat':thetahat.tolist(), 'specfile': specfile}, outfile, indent=2)
-
-with open(resultfile, 'r') as outfile:
-	results = json.load(outfile)
-	
-thetahat = np.array(results['thetahat'])
 
 
 #%%
@@ -704,9 +697,9 @@ if 'cf' in purpose:
 #pcfmean = []
 #
 #for pr in pratiocf:
-#    pricecf= np.array(price)
+#    pricecf= np.array(price) # note: to be fixed due to refactoring Tprice to price
 #    pricecf[0,:] = np.log(pr)
-#    Tprice.set_value(pricecf)
+#    price.set_value(pricecf)
 #    pcf = []
 #    for g in range(ngroup):
 #        Scf = np.tile(S_split[g], ngroup)
@@ -730,28 +723,6 @@ if 'cf' in purpose:
 #
 #plt.plot(pratiocf, pcfmeannp[:,1,0] - pcfmeannp[:,0,0])
 #plt.show()
-
-#%%
-
-if any(p in purpose for p in ['se', 'mfx', 'display', 'cf']):
-    jacobian = theano.gradient.jacobian(nlogl_i, theta)
-    eval_jab = theano.function([theta], jacobian)
-    
-    
-    Jhat = eval_jab(thetahat)
-    covhat = np.linalg.pinv(eval_hess(thetahat))
-    
-    GG = Jhat.transpose().dot(Jhat)
-    GGclustered = np.zeros_like(GG)
-    for stid in df.stationid.unique():
-        Jsubhat = Jhat[(df.stationid==stid).nonzero()].sum(axis=0)
-        GGclustered += np.outer(Jsubhat, Jsubhat)
-    
-    covhatclustered = np.matmul(covhat, np.matmul(GGclustered, covhat))
-    
-    covhat = covhatclustered
-    sehat = np.sqrt(np.diag(covhat))
-    tstat = thetahat/sehat
 
 #%%
 
@@ -809,9 +780,9 @@ if 'display' in purpose:
     gamma_emhat, gamma_emse, gamma_emt = get_stat(gamma_em, thetahat)
     
     #
-    #i1 = np.zeros(ngroup*(nchoice-1)-1, dtype=int) # base alternative = 0
-    #i2 = np.tile(np.arange(ngroup, dtype=int), nchoice-1)[1:] # groupid
-    #i3 = np.repeat(np.arange(nchoice-1, dtype=int), ngroup)[1:] # variance (diagonal element of each choice)
+    #i1 = np.zeros(ngroup*(J-1)-1, dtype=int) # base alternative = 0
+    #i2 = np.tile(np.arange(ngroup, dtype=int), J-1)[1:] # groupid
+    #i3 = np.repeat(np.arange(J-1, dtype=int), ngroup)[1:] # variance (diagonal element of each choice)
     #iii = (i1,i2,i3,i3)
     #Sigmamain = Sigma[iii]
     #
@@ -845,7 +816,7 @@ if 'display' in purpose:
             print_result_row(coef, se, t, lbl)
         print(divider2)
         
-    for j in range(nchoice-1):
+    for j in range(J-1):
         idx = range(j*nX, (j+1)*nX)
         print_result_group("utiltiy of " + choicelbls[j],
                            betahat[idx], betase[idx], betatstat[idx], Xlbls)
@@ -854,20 +825,20 @@ if 'display' in purpose:
     #                   Sigmahat[:ngroup-1], Sigmase[:ngroup-1], Sigmatstat[:ngroup-1],
     #                   ["Treatment " + str(j) for j in range(1,ngroup)])
     #
-    #for j in range(1,nchoice-1):
+    #for j in range(1,J-1):
     #    idx = range(j*ngroup-1, (j+1)*ngroup-1)
     #    print_result_group("variance of random utility, " + choicelbls[j],
     #                       Sigmahat[idx], Sigmase[idx], Sigmatstat[idx],
     #                       ["Treatment " + str(j) for j in range(ngroup)])
     #
-    #for j in range(nchoice-1):
+    #for j in range(J-1):
     #    idx = range(j*(ngroup*2//3), (j+1)*(ngroup*2//3))
     #    print_result_group("effect on log(variance of random utility, " + choicelbls[j] + ")",
     #                       effecthat[idx], effectse[idx], effecttstat[idx],
     #                       ["Treatment " + str(j) for j in range(1,ngroup)])
     #
     
-    Xsigmatreatlbls_extra = ["alpha_i*" + x for x in group_dummies.columns] if use_price_sensitity_in_sigma else []
+    Xsigmatreatlbls_extra = ["alpha_i*" + x for x in treatlbls] if use_price_sensitity_in_sigma else []
         
     print_result_group("variance of ethanol random utility (log)",
                        gamma_ehat, gamma_ese, gamma_et,
@@ -885,30 +856,30 @@ if 'display' in purpose:
     print(divider)
 
 
-#TXsigma = theano.shared(df[Xsigmatreatlbls].values.transpose().astype(floatX))
+#Xsigma = theano.shared(df[Xsigmatreatlbls].values.transpose().astype(floatX))
 
 #Xsigmatreatlbls = []
-#for x in group_dummies.columns:
+#for x in treatlbls:
 #    for y in Xsigmalbls:
 #        df[y+"*"+x] = df[x]*df[y]
 #        Xsigmatreatlbls.append(y+"*"+x)
         
 #%%
 #if 'cf' in purpose:
-#    group_dummies_cf = {x: group_dummies.copy() for x in ['control'] + group_dummies.columns.tolist()}
-#    Xsigma_cf = {x: df[Xsigmatreatlbls].copy() for x in ['control'] + group_dummies.columns.tolist()}
+#    group_dummies_cf = {x: treat_dummies.copy() for x in ['control'] + treatlbls.tolist()}
+#    Xsigma_cf = {x: df[Xsigmatreatlbls].copy() for x in ['control'] + treatlbls.tolist()}
 #    
-#    for x_cf in group_dummies.columns:
-#        for x in group_dummies.columns:
+#    for x_cf in treatlbls:
+#        for x in treatlbls:
 #            group_dummies_cf[x_cf][x] = x_cf == x
 #        
-#        for x in group_dummies.columns:
+#        for x in treatlbls:
 #            for y in Xsigmalbls:
 #                Xsigma_cf[x_cf][y+"*"+x] = df[y]*(x == 'treat_1')
 #    
 #        
-#        TXsigma.set_value(Xsigma_cf[x_cf].values.transpose().astype(floatX))
-#        Tgroup_dummies.set_values(group_dummies_cf[x_cf].values.transpose().astype(floatX))
+#        Xsigma.set_value(Xsigma_cf[x_cf].values.transpose().astype(floatX))
+#        treat_dummies.set_values(group_dummies_cf[x_cf].values.transpose().astype(floatX))
     
 #%%    
 if 'se' in purpose:
@@ -916,7 +887,8 @@ if 'se' in purpose:
         json.dump({'thetahat':thetahat.tolist(), 'thetase': sehat.tolist(), 'specfile': specfile}, outfile, indent=2)
 
 #%%
-        
+from plotnine import ggplot, aes, geom_line, xlab, ylab, scale_linetype_discrete, theme, element_blank, geom_histogram, facet_wrap
+
 if 'sharecf' in purpose:
     pratio_range = np.arange(50,90)/100.0
     share_cf = []
@@ -926,7 +898,7 @@ if 'sharecf' in purpose:
         df_cf = df[pricelbls].copy()
         df_cf['rel_pe_km_adj'] = pe_km_adj_cf - df.pg_km_adj
         share_cf_i = []
-        for treattype in ['control'] + group_dummies.columns.tolist():
+        for treattype in ['control'] + treatlbls.tolist():
             df_cf['treat_1'] = df_cf['const*treat_1'] = (treattype=='treat_1')*1
             df_cf['treat_2'] = df_cf['const*treat_2'] = (treattype=='treat_2')*1
             share_hat, share_se = cal_share_cf(thetahat, df_cf)
@@ -950,45 +922,41 @@ if 'sharecf' in purpose:
     sharecf_results_cf['id'] = np.arange(sharecf_results_cf.shape[0])    
     sharecf_results_cf_long = pd.wide_to_long(sharecf_results_cf, ['share_g', 'share_e', 'share_mg'], i='id', j='treattype', sep='_', suffix='\w+').reset_index()
 
-#%%
 
-from ggplot import ggplot, aes, geom_line, xlab, ylab, save, scale_linetype_discrete, theme, element_blank, geom_histogram, facet_wrap
 
-plot = ggplot(sharecf_results_cf_long[sharecf_results_cf_long.treattype != 'treat2']) + \
-    aes(x='share_e', y='pratio', group='treattype') + \
-    geom_line(aes(linetype='treattype')) + \
-    ylab("$p_e/p_g$") + xlab("ethanol share") + \
-    scale_linetype_discrete(labels=("Control", "Price-ratio treatment")) + \
-    theme(legend_title=element_blank(), legend_position = (0.7, 0.75))
+    plot = ggplot(sharecf_results_cf_long[sharecf_results_cf_long.treattype != 'treat2']) + \
+        aes(x='share_e', y='pratio', group='treattype') + \
+        geom_line(aes(linetype='treattype')) + \
+        ylab("$p_e/p_g$") + xlab("ethanol share") + \
+        scale_linetype_discrete(labels=("Control", "Price-ratio treatment")) + \
+        theme(legend_title=element_blank(), legend_position = (0.7, 0.75))
+    
+    # plot.save(resultfile.replace('_results.json', 'sharecfe.pdf'))
+    plot.save(resultfile.replace('_results.json', 'sharecfe.pdf'))
+    
+    plot = ggplot(sharecf_results_cf_long[sharecf_results_cf_long.treattype != 'treat2']) + \
+        aes(x='share_g', y='pratio', group='treattype') + \
+        geom_line(aes(linetype='treattype')) + \
+        ylab("$p_e/p_g$") + xlab("gasoline share") + \
+        scale_linetype_discrete(labels=("Control", "Price-ratio treatment")) + \
+        theme(legend_title=element_blank(), legend_position = (0.3, 0.75))
+    # plot.save(resultfile.replace('_results.json', 'sharecfg.pdf'))
+    plot.save(resultfile.replace('_results.json', 'sharecfg.pdf'))
 
-# plot.save(resultfile.replace('_results.json', 'sharecfe.pdf'))
-plot.save(resultfile.replace('_results.json', 'sharecfe.pdf'))
-
-#%%
-plot = ggplot(sharecf_results_cf_long[sharecf_results_cf_long.treattype != 'treat2']) + \
-    aes(x='share_g', y='pratio', group='treattype') + \
-    geom_line(aes(linetype='treattype')) + \
-    ylab("$p_e/p_g$") + xlab("gasoline share") + \
-    scale_linetype_discrete(labels=("Control", "Price-ratio treatment")) + \
-    theme(legend_title=element_blank(), legend_position = (0.3, 0.75))
-# plot.save(resultfile.replace('_results.json', 'sharecfg.pdf'))
-plot.save(resultfile.replace('_results.json', 'sharecfg.pdf'))
-
-#%%
-sharecf_results_cf['d1share_e'] = sharecf_results_cf.share_e_treat1 - sharecf_results_cf.share_e_control
-sharecf_results_cf['d1share_g'] = sharecf_results_cf.share_g_treat1 - sharecf_results_cf.share_g_control
-
-plot = ggplot(sharecf_results_cf) + \
-    aes(y='d1share_e', x='pratio') + \
-    geom_line() + \
-    xlab("$p_e/p_g$") + ylab("Change in ethanol share (ppts)")
-plot.save(resultfile.replace('_results.json', 'dsharecfe.pdf'))
-
-plot = ggplot(sharecf_results_cf) + \
-    aes(y='d1share_g', x='pratio') + \
-    geom_line() + \
-    xlab("$p_e/p_g$") + ylab("Change in gasoline share (ppts)")
-plot.save(resultfile.replace('_results.json', 'dsharecfg.pdf'))
+    sharecf_results_cf['d1share_e'] = sharecf_results_cf.share_e_treat1 - sharecf_results_cf.share_e_control
+    sharecf_results_cf['d1share_g'] = sharecf_results_cf.share_g_treat1 - sharecf_results_cf.share_g_control
+    
+    plot = ggplot(sharecf_results_cf) + \
+        aes(y='d1share_e', x='pratio') + \
+        geom_line() + \
+        xlab("$p_e/p_g$") + ylab("Change in ethanol share (ppts)")
+    plot.save(resultfile.replace('_results.json', 'dsharecfe.pdf'))
+    
+    plot = ggplot(sharecf_results_cf) + \
+        aes(y='d1share_g', x='pratio') + \
+        geom_line() + \
+        xlab("$p_e/p_g$") + ylab("Change in gasoline share (ppts)")
+    plot.save(resultfile.replace('_results.json', 'dsharecfg.pdf'))
 
 #%%
 def binsearch(f,  target, lb, ub, toler=1e-6):
@@ -1022,7 +990,7 @@ def binsearch_vector(f, target, lb, ub, toler=1e-6):
     
 if 'choicesetcf' in purpose:
     ndraws_cf = 50
-    draws_cf = np.random.normal(size=(ndraws_cf, nobs,2))
+    draws_cf = np.random.normal(size=(ndraws_cf, N, 2))
     
     
             
@@ -1189,6 +1157,30 @@ for treattype in ['control', 'treat_1']:
                 'pe_discount_se': pe_discount_se}, ignore_index=True)
 
 choisetcf2_indivdiscount_60pg_df.to_csv(resultfile.replace('_results.json', '_choisetcf_indivdiscount_60pg.csv'))
+
+#%% TRANSFER
+
+
+choisetcf2_indivtransfer_70pg_df = pd.DataFrame()
+pe_km_adj_cf = df.pe_km_adj/df.pe_lt*(df.pg_lt*0.7)
+for treattype in ['control', 'treat_1']:
+    mean_utility_fullchoiceset = mean_utility_cf(pe_km_adj_cf, treattype, axes=0)
+    
+    mean_utility_newchoiceset = lambda transfer, theta: mean_utility_cf(pe_km_adj_cf-transfer, treattype, choiceset['no_fossil'], axes=0, theta=theta)
+    find_transfer = lambda theta: binsearch_vector(lambda transfer: mean_utility_newchoiceset(transfer, theta), mean_utility_fullchoiceset, np.ones_like(mean_utility_fullchoiceset)*(-3), np.ones_like(mean_utility_fullchoiceset)*10).mean()
+    transfer_solution = find_transfer(thetahat)
+    grad_transfer_solution = findiff(find_transfer, thetahat)
+    transfer_se = np.squeeze(np.sqrt(np.dot(np.dot(grad_transfer_solution.transpose(), covhat), grad_transfer_solution)))
+    
+    print('transfer = {:.5f}, se = {:.5f}'.format(transfer_solution, transfer_se))
+    
+    choisetcf2_indivtransfer_70pg_df = choisetcf2_indivtransfer_70pg_df.append({
+            'treattype': treattype, 
+            'choiceset': choicesetcode,
+            'pe_transfer': transfer_solution,
+            'pe_transfer_se': transfer_se}, ignore_index=True)
+
+choisetcf2_indivtransfer_70pg_df.to_csv(resultfile.replace('_results.json', 'choisetcf2_indivtransfer_70pg.csv'))
 
 #%%
 pe_km_adj_cf = df.pe_km_adj.copy()
