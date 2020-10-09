@@ -5,6 +5,10 @@ Created on Thu Sep 26 23:21:11 2019
 @author: long
 """
 
+import numpy as np
+import scipy.sparse as sps
+
+
 try:
     #from knitro.numpy import Variables, Callback, KN_RC_EVALFC, KN_RC_EVALGA, KN_RC_EVALH, KN_RC_EVALH_NO_F, KN_DENSE, KN_DENSE_ROWMAJOR, optimize, KN_OUTLEV_ALL
     
