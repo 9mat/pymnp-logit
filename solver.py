@@ -5,6 +5,10 @@ Created on Thu Sep 26 23:21:11 2019
 @author: long
 """
 
+import numpy as np
+import scipy.sparse as sps
+
+
 try:
     #from knitro.numpy import Variables, Callback, KN_RC_EVALFC, KN_RC_EVALGA, KN_RC_EVALH, KN_RC_EVALH_NO_F, KN_DENSE, KN_DENSE_ROWMAJOR, optimize, KN_OUTLEV_ALL
     
@@ -89,15 +93,50 @@ try:
         return x
 
 except ImportError:
-    from pyipopt import set_loglevel, fmin_unconstrained
-    
-    def solve_unconstr(theta0, eval_f, eval_grad, eval_hess=None):
-        set_loglevel(1)
-        thetahat , _, _, _, _, fval = fmin_unconstrained(
-            eval_f,
-            theta0,
-            fprime=eval_grad,
-            fhess=eval_hess,
-        )
-    
-        return thetahat
+    try:
+        from pyipopt import set_loglevel, fmin_unconstrained
+        
+        def solve_unconstr(theta0, eval_f, eval_grad, eval_hess=None):
+            set_loglevel(1)
+            thetahat , _, _, _, _, fval = fmin_unconstrained(
+                eval_f,
+                theta0,
+                fprime=eval_grad,
+                fhess=eval_hess,
+            )
+            return thetahat
+
+    except ImportError:
+        import ipopt
+        def solve_unconstr(theta0, eval_f, eval_grad, eval_hess=None):
+            n = len(theta0)
+
+            class pymnp(object):
+                def __init__(self):
+                    pass
+
+                def objective(self, x):
+                    return eval_f(x)
+
+                def gradient(self, x):
+                    return eval_grad(x)
+
+                def hessianstructure(self):
+                    global hs
+
+                    hs = sps.coo_matrix(np.tril(np.ones((n, n))))
+                    return (hs.col, hs.row)
+
+                def hessian(self, x, lagrange, obj_factor):
+                    H = eval_hess(x)*obj_factor
+                    return H[hs.row, hs.col]
+
+            lb = [-1000]*n
+            ub = [1000]*n
+            nlp = ipopt.problem(n=n, m=0, problem_obj=pymnp())
+            nlp.addOption(b'derivative_test', b'first-order')
+            x, info = nlp.solve(theta0)
+
+            return x
+     
+        

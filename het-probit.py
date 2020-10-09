@@ -31,6 +31,7 @@ specfile = sys.argv[1] if len(sys.argv) > 1 else input("Path to spec: ")
 #     specify purposes in the second argument of the command, or when prompted      
 purpose = sys.argv[2] if len(sys.argv) > 2 else input("Purpose (solve/mfx/display): ")
 
+theano.config.gcc.cxxflags = "-Wno-c++11-narrowing"
 
 # read the spec file
 with open(specfile, 'r') as f:
@@ -138,10 +139,11 @@ ngroup  = df.treattype.unique().size
 use_dprice = nalpha > 1
 
 
-ngamma = len(Xsigmalbls) + use_price_sensitity_in_sigma
-ngamma_e = ngamma_m = ngamma_em = ngamma*(ngroup-1) + ngamma - use_price_sensitity_in_sigma
-ngamma_e -= ('const' in Xsigmalbls)
- 
+# ngamma = len(Xsigmalbls) + use_price_sensitity_in_sigma
+# ngamma_e = ngamma_m = ngamma_em = ngamma*(ngroup-1) + ngamma - use_price_sensitity_in_sigma
+# ngamma_e -= ('const' in Xsigmalbls)
+ngamma_e = ngamma_m = ngamma_em = len(Xsigmalbls)
+
 # number of stations (= number of unique station id)
 M = df.stationid.unique().size
 
@@ -221,6 +223,12 @@ offset += ngamma_m
 gamma_em = theta[offset: offset + ngamma_em]
 
 offset += ngamma_em
+lsigma_m = theta[offset]
+
+offset +=1 
+atsigma_em = theta[offset]
+
+offset += 1
 xiraw = theta[offset:offset+nxi] if use_fe else 0
 
 # fuel-station fixed effects
@@ -316,29 +324,31 @@ else:
 #%%
     
 # covariates in the covariance equation
-Xsigma = df2tensor(Xsigmatreatlbls, 'Xsigma')
+# Xsigma = df2tensor(Xsigmatreatlbls, 'Xsigma')
+Xsigma = df2tensor(Xsigmalbls, 'Xsigma')
 
-# covariates in the covariance equation, excluding the const
-Xsigma_noconst = df2tensor(Xsigmatreatlbls_noconst, 'Xsigma_noconst')
 
-# group dummies
-treat_dummies = df2tensor(treatlbls, 'treat')
+# # covariates in the covariance equation, excluding the const
+# Xsigma_noconst = df2tensor(Xsigmatreatlbls_noconst, 'Xsigma_noconst')
 
-# add the price sensitivity to Xsigma if allowing price sentivity to shift 
-# the covariance matrix
-if use_price_sensitity_in_sigma:
-    alpha_treat = (alpha_i-alpha_i.mean())*treat_dummies
-    Xsigmafull = T.concatenate([Xsigma, alpha_treat])
-    Xsigmafull_noconst = T.concatenate([Xsigma_noconst, alpha_treat])
-else:
-    Xsigmafull = Xsigma
-    Xsigmafull_noconst = Xsigma_noconst
+# # group dummies
+# treat_dummies = df2tensor(treatlbls, 'treat')
+
+# # add the price sensitivity to Xsigma if allowing price sentivity to shift 
+# # the covariance matrix
+# if use_price_sensitity_in_sigma:
+#     alpha_treat = (alpha_i-alpha_i.mean())*treat_dummies
+#     Xsigmafull = T.concatenate([Xsigma, alpha_treat])
+#     Xsigmafull_noconst = T.concatenate([Xsigma_noconst, alpha_treat])
+# else:
+#     Xsigmafull = Xsigma
+#     Xsigmafull_noconst = Xsigma_noconst
     
     
 
-var_z00 = T.exp(gamma_e.dot(Xsigmafull_noconst))
-var_z11 = T.exp(gamma_m.dot(Xsigmafull))
-cov_z10 = T.tanh(gamma_em.dot(Xsigmafull))*T.sqrt(var_z00*var_z11)
+var_z00 = T.exp(gamma_e.dot(Xsigma))*alpha_i*alpha_i + 1
+var_z11 = T.exp(gamma_m.dot(Xsigma))*alpha_i*alpha_i + T.exp(lsigma_m*2)
+cov_z10 = T.tanh(gamma_em.dot(Xsigma))*T.sqrt(var_z00*var_z11)*alpha_i*alpha_i + T.tanh(atsigma_em)*T.exp(lsigma_m)
 
 # note that the above covariance matrix correponds to mean utiltity relative
 # to the first alternative (gasoline)
@@ -380,9 +390,9 @@ Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1)))
 
 # Cholesky decomposition (see the note above)
 # These vectors will be used in the GHK simulator
-c00 = T.sqrt(Sigma[:,0,0])
+c00 = T.sqrt(Sigma[:,0,0]) + 1e-8
 c10 = Sigma[:,1,0]/c00
-c11 = T.sqrt(Sigma[:,1,1] - c10**2)
+c11 = T.sqrt(Sigma[:,1,1] - c10**2) + 1e-8
 
 #%%
 
