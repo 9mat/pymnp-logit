@@ -7,6 +7,8 @@ import theano.tensor.slinalg
 import json
 import sys
 
+theano.config.gcc.cxxflags = "-Wno-c++11-narrowing"
+
 #%% READ INPUT AND SPECIFICATIONS
 
 # Spec file:
