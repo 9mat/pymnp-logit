@@ -185,10 +185,32 @@ if use_fe:
 else:
     nxi = 0
     
-theta0 = np.zeros((nalpha + nbeta + ngamma_e + ngamma_m + ngamma_em + 2 + nxi,))
+#theta0 = np.zeros((nalpha + nbeta + ngamma_e + ngamma_m + ngamma_em + 2 + nxi,))
+    
+    
+gamma_ehat = [-0.38133455, -0.18611983, -6.01431427]
+gamma_mhat = [ -5.87281899,  -2.37829492, -52.92545266]
+gamma_emhat = [1.08950418e-05,  3.37502157e-05,  1.02565212e-05]
+lsigma_mhat = 0.326445991950642
+atsigma_emhat = -0.667286566721085
+#alphahat = [-196.14601568,   36.31973006,   14.31932179,   26.09967419,
+#         37.65339836,    0.79270248,    9.07639863]
+alphahat = [0]*nalpha
+alphahat[0] = -30
+betahat = [0.0]*nbeta
 
-if 'rel_pe_km_adj' in pricelbls:
-    theta0[0] = -30
+theta0 = np.array(alphahat + betahat + gamma_ehat + gamma_mhat + gamma_emhat + [lsigma_mhat, atsigma_emhat])
+
+#theta0 = np.array([
+#        0, 0, 0, 0, 0,
+#        -3.36951638e+01, -2.74197526e+01, -1.86185845e-01, -9.44574978e-02,
+#       -2.05805368e-01, -4.67825877e-01, -5.11601818e-01, -3.30847195e-01,
+#       -6.32480976e+00, -4.65350655e+00, -1.76412592e+00, -2.85187053e+01,
+#        2.67363491e-05, -3.29968552e-05, -7.01768875e-04,  2.80919394e-01,
+#        6.08997501e-01])
+
+#if 'rel_pe_km_adj' in pricelbls:
+#    theta0[0] = -30
 
 np.random.seed(1234)
 
@@ -363,7 +385,7 @@ cov_z10 = T.tanh(gamma_em.dot(Xsigma))*T.sqrt(var_z00*var_z11)*alpha_i*alpha_i +
 # each of the following is a vector of the length N
 s00 = T.sqrt(var_z00)
 s10 = cov_z10/s00
-s11 = T.sqrt(var_z11 - s10**2)
+s11 = T.sqrt(var_z11 - s10**2 + 1e-6)
 s01 = T.zeros((N,))
 
 S = (T.stack([s00, s01, s10, s11]) # size (4, N)
@@ -390,9 +412,9 @@ Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1)))
 
 # Cholesky decomposition (see the note above)
 # These vectors will be used in the GHK simulator
-c00 = T.sqrt(Sigma[:,0,0]) + 1e-8
+c00 = T.sqrt(Sigma[:,0,0]) + 1e-4
 c10 = Sigma[:,1,0]/c00
-c11 = T.sqrt(Sigma[:,1,1] - c10**2) + 1e-8
+c11 = T.sqrt(Sigma[:,1,1] - c10**2) + 1e-4
 
 #%%
 
@@ -411,8 +433,12 @@ draws = (np.tile(np.arange(ndraws), (N,1)).transpose() + 0.5)/ndraws
 prob0 = normcdf(-Vnonchoice[0,:]/c00)
 prob1 = normcdf(-(Vnonchoice[1,:] + c10*norminv(draws*prob0))/c11).mean(axis=0)
 
-nlogl_i = -T.log(prob0)*mask[0] - T.log(prob1)*mask[1]
-nlogl = -T.log(prob0).sum() - T.log(prob1[mask[1]]).sum()
+if use_fe:
+    nlogl_i = -T.log(prob0)*mask[0] - T.log(prob1)*mask[1]
+    nlogl = -T.log(prob0).sum() - T.log(prob1[mask[1]]).sum()
+else:
+    nlogl_i = -T.log(prob0) - T.log(prob1)
+    nlogl = -T.log(prob0).sum() - T.log(prob1).sum()
 
 
 # theano function to calculate the log likelihood
