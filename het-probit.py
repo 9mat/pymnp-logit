@@ -143,6 +143,7 @@ use_dprice = nalpha > 1
 # ngamma_e = ngamma_m = ngamma_em = ngamma*(ngroup-1) + ngamma - use_price_sensitity_in_sigma
 # ngamma_e -= ('const' in Xsigmalbls)
 ngamma_e = ngamma_m = ngamma_em = len(Xsigmalbls)
+ngamma_e -= 1
 
 # number of stations (= number of unique station id)
 M = df.stationid.unique().size
@@ -188,18 +189,22 @@ else:
 #theta0 = np.zeros((nalpha + nbeta + ngamma_e + ngamma_m + ngamma_em + 2 + nxi,))
     
     
-gamma_ehat = [-0.38133455, -0.18611983, -6.01431427]
-gamma_mhat = [ -5.87281899,  -2.37829492, -52.92545266]
-gamma_emhat = [1.08950418e-05,  3.37502157e-05,  1.02565212e-05]
+#gamma_ehat = [-0.38133455, -0.18611983, -6.01431427]
+#gamma_ehat = [-0.38133455*np.exp(-6), -0.18611983*np.exp(-6)]
+gamma_ehat = [0]*ngamma_e
+#gamma_mhat = [ -5.87281899,  -2.37829492, -52.92545266]
+#gamma_emhat = [1.08950418e-05,  3.37502157e-05,  1.02565212e-05]
+gamma_mhat = [0]*ngamma_m
+gamma_emhat = [0]*ngamma_em
 lsigma_mhat = 0.326445991950642
 atsigma_emhat = -0.667286566721085
 #alphahat = [-196.14601568,   36.31973006,   14.31932179,   26.09967419,
 #         37.65339836,    0.79270248,    9.07639863]
 alphahat = [0]*nalpha
-alphahat[0] = -30
+alphahat[0] = -20
 betahat = [0.0]*nbeta
 
-theta0 = np.array(alphahat + betahat + gamma_ehat + gamma_mhat + gamma_emhat + [lsigma_mhat, atsigma_emhat])
+theta0 = np.array(alphahat + betahat + gamma_ehat + gamma_mhat + gamma_emhat + [lsigma_mhat, atsigma_emhat] + [0]*nxi)
 
 #theta0 = np.array([
 #        0, 0, 0, 0, 0,
@@ -348,7 +353,7 @@ else:
 # covariates in the covariance equation
 # Xsigma = df2tensor(Xsigmatreatlbls, 'Xsigma')
 Xsigma = df2tensor(Xsigmalbls, 'Xsigma')
-
+Xsigma_noconst = df2tensor([lb for lb in Xsigmalbls if lb != 'const'], 'Xsigma_noconst')
 
 # # covariates in the covariance equation, excluding the const
 # Xsigma_noconst = df2tensor(Xsigmatreatlbls_noconst, 'Xsigma_noconst')
@@ -366,17 +371,45 @@ Xsigma = df2tensor(Xsigmalbls, 'Xsigma')
 #     Xsigmafull = Xsigma
 #     Xsigmafull_noconst = Xsigma_noconst
     
-    
+var_z00 = T.abs_(gamma_e.dot(Xsigma_noconst)*alpha_i*alpha_i + 1)
+var_z11 = T.abs_(gamma_m.dot(Xsigma)*alpha_i*alpha_i + T.exp(lsigma_m*2))
+cov_z10 = gamma_em.dot(Xsigma)*alpha_i*alpha_i + T.tanh(atsigma_em)*T.exp(lsigma_m*2)
 
-var_z00 = T.exp(gamma_e.dot(Xsigma))*alpha_i*alpha_i + 1
-var_z11 = T.exp(gamma_m.dot(Xsigma))*alpha_i*alpha_i + T.exp(lsigma_m*2)
-cov_z10 = T.tanh(gamma_em.dot(Xsigma))*T.sqrt(var_z00*var_z11)*alpha_i*alpha_i + T.tanh(atsigma_em)*T.exp(lsigma_m)
+cov_z10_ub = T.sqrt(var_z00*var_z11) + 1e-3
+cov_z10 = T.minimum(cov_z10, cov_z10_ub)
+cov_z10 = T.maximum(cov_z10, -cov_z10_ub)
+
 
 # note that the above covariance matrix correponds to mean utiltity relative
 # to the first alternative (gasoline)
 
 #%%
 
+Xp_unique = df[Xplbls].drop_duplicates().values.transpose()
+alpha_unique = T.dot(alpha, Xp_unique).dimshuffle(0,'x')
+nn = Xp_unique.shape[1]
+
+Xsigma_noconst_constr = np.eye(2)
+Xsigma_constr = np.eye(3)
+
+Xsigma_noconst_constr = np.eye(2)
+Xsigma_constr = np.eye(3)
+const_index = np.argmax(np.array(Xsigmalbls) == 'const')
+Xsigma_constr[const_index, :] = 1
+
+var_z00_unique = T.abs_(gamma_e.dot(Xsigma_noconst_constr)*alpha_unique*alpha_unique + 1)
+var_z11_unique = T.abs_(gamma_m.dot(Xsigma_constr)*alpha_unique*alpha_unique + T.exp(lsigma_m*2))
+cov_z10_unique = gamma_em.dot(Xsigma_constr)*alpha_unique*alpha_unique + T.tanh(atsigma_em)*T.exp(lsigma_m*2)
+
+var_z00_unique_padded = T.concatenate([var_z00_unique, np.ones((nn, 1))], axis=1)
+
+cov_z10_constr = var_z00_unique_padded*var_z11_unique - cov_z10_unique*cov_z10_unique
+
+constr_all = T.concatenate((var_z00_unique.flatten(), 
+                            var_z11_unique.flatten(),
+                            cov_z10_constr.flatten())) 
+
+#%%
 
 # Cholesky decomposition for 2x2 matrix
 # see https://algowiki-project.org/en/Cholesky_method
@@ -385,7 +418,7 @@ cov_z10 = T.tanh(gamma_em.dot(Xsigma))*T.sqrt(var_z00*var_z11)*alpha_i*alpha_i +
 # each of the following is a vector of the length N
 s00 = T.sqrt(var_z00)
 s10 = cov_z10/s00
-s11 = T.sqrt(var_z11 - s10**2 + 1e-6)
+s11 = T.sqrt(var_z11 - s10**2)
 s01 = T.zeros((N,))
 
 S = (T.stack([s00, s01, s10, s11]) # size (4, N)
@@ -412,9 +445,9 @@ Sigma = T.batched_dot(MS, MS.dimshuffle((0,2,1)))
 
 # Cholesky decomposition (see the note above)
 # These vectors will be used in the GHK simulator
-c00 = T.sqrt(Sigma[:,0,0]) + 1e-4
+c00 = T.sqrt(Sigma[:,0,0])
 c10 = Sigma[:,1,0]/c00
-c11 = T.sqrt(Sigma[:,1,1] - c10**2) + 1e-4
+c11 = T.sqrt(Sigma[:,1,1] - c10**2)
 
 #%%
 
@@ -437,8 +470,8 @@ if use_fe:
     nlogl_i = -T.log(prob0)*mask[0] - T.log(prob1)*mask[1]
     nlogl = -T.log(prob0).sum() - T.log(prob1[mask[1]]).sum()
 else:
-    nlogl_i = -T.log(prob0) - T.log(prob1)
-    nlogl = -T.log(prob0).sum() - T.log(prob1).sum()
+    nlogl_i = -T.log(prob0) - T.log(prob1)*mask[1]
+    nlogl = -T.log(prob0).sum() - T.log(prob1[mask[1]]).sum()
 
 
 # theano function to calculate the log likelihood
@@ -454,6 +487,17 @@ eval_grad = lambda t: np.squeeze(grad(t))
 
 # theano hessian returns a 3D tensor, convert it to a matrix
 eval_hess = lambda t: np.squeeze(hess(t))
+
+#%%
+
+eval_constr = theano.function([theta], outputs = constr_all)
+eval_jacobian = theano.function([theta], outputs = T.jacobian(constr_all, theta))
+
+lagrange_factor = T.dvector('lagrange_factor')
+lagrange_sum = constr_all.dot(lagrange_factor)
+lagrange_hess = theano.function([theta, lagrange_factor], outputs = theano.gradient.hessian(lagrange_sum, [theta]))
+
+eval_lagrange_hess = lambda x, t: np.squeeze(lagrange_hess(x, t))
 
 #%% 
 
@@ -567,14 +611,57 @@ def findiff(f, x):
 resultfile = spec['resultfile'] if 'resultfile' in spec else input('Path to result: ')
 
 if 'solve' in purpose:
-    from solver import solve_unconstr
-    thetahat = solve_unconstr(theta0, eval_f, eval_grad, eval_hess)
+#    from solver import solve_unconstr
+#    thetahat = solve_unconstr(theta0, eval_f, eval_grad, eval_hess)
+    
+    import ipopt
+    import scipy.sparse as sps
+    n = len(theta0)
+
+    class pymnp(object):
+        def __init__(self):
+            pass
+
+        def objective(self, x):
+            return eval_f(x)
+
+        def gradient(self, x):
+            return eval_grad(x)
+        
+        def constraints(self, x):
+            c = eval_constr(x)
+            print("Max constr violation", min(c))
+            return c
+
+        def hessianstructure(self):
+            global hs
+
+            hs = sps.coo_matrix(np.tril(np.ones((n, n))))
+            return (hs.col, hs.row)
+        
+        def jacobian(self, x):
+            return eval_jacobian(x)
+
+        def hessian(self, x, lagrange, obj_factor):
+            H = eval_hess(x)*obj_factor + eval_lagrange_hess(x, lagrange)
+            return H[hs.row, hs.col]
+
+    n_constr = Xp_unique.shape[1]*(Xsigma_noconst_constr.shape[0] + 2*Xsigma_constr.shape[0])
+    lb = [-1e9]*len(theta0)
+    ub = [1e9]*len(theta0)
+    cl = [1e-5]*n_constr
+    cu = [1e9]*n_constr
+    nlp = ipopt.problem(n=n, m=n_constr, problem_obj=pymnp(), cl=cl, cu=cu)
+    nlp.addOption(b'derivative_test', b'first-order')
+    nlp.addOption(b'max_iter', 500)
+    thetahat, info = nlp.solve(theta0)
+
     with open(resultfile, 'w') as outfile:
         json.dump({'thetahat':thetahat.tolist(), 'specfile': specfile}, outfile, indent=2)
 
 with open(resultfile, 'r') as outfile:
 	results = json.load(outfile)
-	
+
 thetahat = np.array(results['thetahat'])
 
 #%%
