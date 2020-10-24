@@ -135,6 +135,7 @@ except ImportError:
             ub = [1000]*n
             nlp = ipopt.problem(n=n, m=0, problem_obj=pymnp())
             nlp.addOption(b'derivative_test', b'first-order')
+            nlp.addOption(b'max_iter', 500)
             x, info = nlp.solve(theta0)
 
             return x
